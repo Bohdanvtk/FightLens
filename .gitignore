@@ -1,38 +1,35 @@
-# Python cache and compiled files
+# Python generated files
 __pycache__/
 *.py[cod]
-
-# Python package build artifacts
 *.egg-info/
+
+# Build artifacts
 build/
 dist/
 
-# Virtual environments
+# Virtual environment
 .venv/
-venv/
 
-# Environment variables and secrets
+# Secrets
 .env
-.env.*
-!.env.example
 
-# IDE settings
+# IDE
 .idea/
 .vscode/
 
-# Testing, linting and coverage caches
+# Testing and linting cache
 .pytest_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 
-# Generated project data
+# Generated data
 data/raw/*
 !data/raw/.gitkeep
 
 data/processed/*
 !data/processed/.gitkeep
 
-# Operating system files
+# OS generated files
 .DS_Store
 Thumbs.db
