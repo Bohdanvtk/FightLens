@@ -1,12 +1,35 @@
 video:
   # Path to the source video.
-  # Relative paths are resolved from the project root.
+  # Relative paths are resolved from the project root, so the program
+  # works no matter which directory it is launched from.
   input_path: "data/raw/test_video.mp4"
 
-  # Directory where extracted frames will be saved.
+  # Root directory where results are saved.
+  # Relative paths are resolved from the project root.
+  # Each video gets its own subfolder containing a "windows" directory
+  # (one folder per time window) and a manifest.json.
   output_dir: "data/processed/"
 
-  # Save every N-th frame:
-  # 1  -> every frame
-  # 30 -> frames 0, 30, 60, 90, ...
-  frame_step: 30
+  # Duration of a single time window, in seconds.
+  # Combined with the effective FPS this decides how many source frames
+  # one window spans, e.g. 2s * 30fps = 60 frames per window.
+  n_sec_per_window: 1.2
+
+  # How many images to keep from each window.
+  # These frames are sampled evenly across the whole window, not taken
+  # from its beginning only.
+  n_img_per_window: 6
+
+  # What to do if the output folder for this video already exists:
+  # true  -> delete it and rewrite from scratch
+  # false -> stop with an error
+  overwrite: true
+
+  # Optional manual FPS override (fallback).
+  # null  -> read FPS automatically from the video metadata.
+  # number -> force this FPS, useful for videos with missing or broken
+  #           metadata. Must be a positive number.
+  fps_override: null
+
+# Note: the final, shorter-than-full slice of the video is NOT discarded.
+# It becomes the last (partial) window so no footage is lost.

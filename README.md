@@ -29,7 +29,8 @@ Fight video
 - [x] Gemini API integration
 - [x] YAML-based configuration
 - [x] Video loading with OpenCV
-- [x] Extraction of every N-th video frame
+- [x] Time-window splitting with evenly sampled frames
+- [x] Per-window folders and a processing manifest
 - [x] Frame visualization with source-frame labels
 - [ ] Automatic Gemini frame descriptions
 - [ ] Text embedding generation
@@ -47,21 +48,34 @@ Gemini will later be used to generate semantic descriptions of fight clips and f
 
 The current frame-extraction pipeline does not automatically call Gemini, so preprocessing does not consume API tokens.
 
-## Frame extraction
+## Time-window frame extraction
 
-The preprocessing module loads a source video and extracts one frame for every configurable `N` video frames.
+The preprocessing module splits a source video into short **time windows** and keeps a few representative frames from each one. One window will later map to a single multimodal request to Gemini.
 
-For example, with a frame step of `30`, the extracted sequence represents approximately:
+Two parameters control this:
+
+- `n_sec_per_window` — how many seconds of video one window spans. With 30 FPS and `n_sec_per_window: 2`, a full window covers ~60 source frames (window 0 ≈ frames 0–59, window 1 ≈ 60–119, ...).
+- `n_img_per_window` — how many frames to keep from each window. They are sampled **evenly** across the whole window (not the first N in a row), with the first and last picks near the window boundaries.
+
+FPS is read automatically from the video metadata. An optional `fps_override` acts as a fallback for videos with missing or broken metadata. The final, shorter-than-full slice of the video is **not** discarded — it becomes the last (partial) window.
+
+### Output layout
 
 ```text
-Source frame 1
-Source frame 30
-Source frame 60
-Source frame 90
-...
+data/processed/<video_name>/
+    manifest.json
+    windows/
+        window_000000/
+            img_00_frame_00000000_0000000.00s.jpg
+            img_01_frame_00000012_0000000.40s.jpg
+            ...
+        window_000001/
+            ...
 ```
 
-The video path, output directory, and frame step are configured through YAML.
+Each image name encodes its local position in the window, its source frame index, and its timestamp. The `manifest.json` records per-window metadata (frame ranges, timestamps, saved images, whether the window is full or partial) plus global video info, and is used later to tie Gemini descriptions and embeddings back to a specific moment.
+
+All parameters are configured through YAML.
 
 ## Frame sampling preview
 
@@ -73,7 +87,7 @@ The extracted frames can be displayed in a vertical sequence with labels showing
 
 ## Running the project
 
-Configure the input video and frame step in:
+Configure the input video, window duration, and images per window in:
 
 ```text
 configs/default.yaml
