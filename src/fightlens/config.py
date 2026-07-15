@@ -88,6 +88,16 @@ def _is_positive_number(value: Any) -> bool:
     )
 
 
+def _is_non_negative_number(value: Any) -> bool:
+    """True for a zero-or-positive int or float (but not bool)."""
+
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+    )
+
+
 def validate_video_config(video_config: Any) -> dict[str, Any]:
     """
     Validate the 'video' section of the configuration.
@@ -101,7 +111,8 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
     Returns:
         A mapping of validated parameters:
             "input_path", "output_dir",
-            "n_sec_per_window", "n_img_per_window", "fps_override".
+            "n_sec_per_window", "n_img_per_window", "fps_override",
+            "start_seconds", "end_seconds", "max_windows".
 
     Raises:
         ValueError: If any parameter is missing or invalid.
@@ -158,6 +169,37 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
             f"(manual FPS fallback), got: {fps_override!r}."
         )
 
+    start_seconds = video_config.get("start_seconds", 0)
+    if not _is_non_negative_number(start_seconds):
+        raise ValueError(
+            "video.start_seconds must be zero or a positive number "
+            f"(where extraction starts), got: {start_seconds!r}."
+        )
+
+    end_seconds = video_config.get("end_seconds")
+    if end_seconds is not None:
+        if not _is_positive_number(end_seconds):
+            raise ValueError(
+                "video.end_seconds must be a positive number or null "
+                f"(null = end of video), got: {end_seconds!r}."
+            )
+        if float(end_seconds) <= float(start_seconds):
+            raise ValueError(
+                "video.end_seconds must be greater than video.start_seconds, "
+                f"got: start={start_seconds!r}, end={end_seconds!r}."
+            )
+
+    max_windows = video_config.get("max_windows")
+    if max_windows is not None and (
+        isinstance(max_windows, bool)
+        or not isinstance(max_windows, int)
+        or max_windows <= 0
+    ):
+        raise ValueError(
+            "video.max_windows must be a positive integer or null "
+            f"(null = no limit), got: {max_windows!r}."
+        )
+
     return {
         "input_path": input_path,
         "output_dir": output_dir,
@@ -167,4 +209,81 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
         "fps_override": (
             float(fps_override) if fps_override is not None else None
         ),
+        "start_seconds": float(start_seconds),
+        "end_seconds": (
+            float(end_seconds) if end_seconds is not None else None
+        ),
+        "max_windows": max_windows,
+    }
+
+
+def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
+    """
+    Validate the 'descriptions' section of the configuration.
+
+    Args:
+        descriptions_config: The 'descriptions' section from the loaded
+            configuration.
+
+    Returns:
+        A mapping of validated parameters:
+            "manifest_path", "output_path", "request_delay_seconds",
+            "retry_attempts", "prompt".
+
+    Raises:
+        ValueError: If any parameter is missing or invalid.
+    """
+
+    if not isinstance(descriptions_config, dict):
+        raise ValueError(
+            "The configuration must contain a 'descriptions' section "
+            "(a YAML mapping)."
+        )
+
+    manifest_path = descriptions_config.get("manifest_path")
+    if not isinstance(manifest_path, str) or not manifest_path.strip():
+        raise ValueError(
+            "descriptions.manifest_path must be a non-empty string path to "
+            f"the extraction manifest.json, got: {manifest_path!r}."
+        )
+
+    output_path = descriptions_config.get("output_path")
+    if not isinstance(output_path, str) or not output_path.strip():
+        raise ValueError(
+            "descriptions.output_path must be a non-empty string path to "
+            f"the output JSON file, got: {output_path!r}."
+        )
+
+    request_delay_seconds = descriptions_config.get("request_delay_seconds", 4.0)
+    if not _is_non_negative_number(request_delay_seconds):
+        raise ValueError(
+            "descriptions.request_delay_seconds must be zero or a positive "
+            f"number (pause between Gemini calls), got: "
+            f"{request_delay_seconds!r}."
+        )
+
+    retry_attempts = descriptions_config.get("retry_attempts", 1)
+    if (
+        isinstance(retry_attempts, bool)
+        or not isinstance(retry_attempts, int)
+        or retry_attempts < 0
+    ):
+        raise ValueError(
+            "descriptions.retry_attempts must be zero or a positive integer "
+            f"(extra attempts after a failed call), got: {retry_attempts!r}."
+        )
+
+    prompt = descriptions_config.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError(
+            "descriptions.prompt must be a non-empty string (the text sent "
+            f"to Gemini with each window's frames), got: {prompt!r}."
+        )
+
+    return {
+        "manifest_path": manifest_path,
+        "output_path": output_path,
+        "request_delay_seconds": float(request_delay_seconds),
+        "retry_attempts": retry_attempts,
+        "prompt": prompt,
     }

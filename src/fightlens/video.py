@@ -63,17 +63,22 @@ def frames_per_window(effective_fps: float, n_sec_per_window: float) -> int:
     return max(1, int(round(effective_fps * n_sec_per_window)))
 
 
-def build_windows(total_frames: int, window_size: int) -> list[dict[str, Any]]:
+def build_windows(
+    total_frames: int,
+    window_size: int,
+    start_frame: int = 0,
+) -> list[dict[str, Any]]:
     """
-    Split the video into contiguous frame-range windows (no physical cut).
+    Split a frame range into contiguous frame-range windows (no physical cut).
 
-    window 0 -> [0, window_size), window 1 -> [window_size, 2*window_size), ...
-    The final window may be shorter; it is kept as the last partial window.
+    window 0 -> [start_frame, start_frame + window_size), and so on up to
+    total_frames (exclusive). The final window may be shorter; it is kept
+    as the last partial window.
     """
 
     windows: list[dict[str, Any]] = []
     window_id = 0
-    start = 0
+    start = start_frame
 
     while start < total_frames:
         end = min(start + window_size, total_frames)  # exclusive
@@ -124,6 +129,9 @@ def extract_windows(
     n_img_per_window: int,
     fps_override: float | None = None,
     overwrite: bool = False,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+    max_windows: int | None = None,
 ) -> tuple[dict[str, Any], Path]:
     """
     Split a video into time windows and save sampled frames per window.
@@ -131,6 +139,11 @@ def extract_windows(
     Layout: <output_dir>/<video_stem>/{manifest.json, windows/window_000000/...}
     If the video output folder already exists: overwrite=True deletes it
     first, overwrite=False stops with an error.
+
+    The processed scope can be limited so only part of a long video is
+    extracted: start_seconds / end_seconds bound the time range (end_seconds
+    None = end of video) and max_windows caps how many windows are kept.
+    Timestamps always stay relative to the original video, not the scope.
     Returns (manifest, manifest_path).
     """
 
@@ -161,7 +174,13 @@ def extract_windows(
 
     effective_fps, fps_source = resolve_effective_fps(video_fps, fps_override)
     window_size = frames_per_window(effective_fps, n_sec_per_window)
-    windows = build_windows(total_frames, window_size)
+
+    first_frame, end_frame = _resolve_scope(
+        total_frames, effective_fps, start_seconds, end_seconds
+    )
+    windows = build_windows(end_frame, window_size, start_frame=first_frame)
+    if max_windows is not None:
+        windows = windows[:max_windows]
 
     windows_root = video_output_dir / "windows"
 
@@ -194,11 +213,48 @@ def extract_windows(
         n_sec_per_window=n_sec_per_window,
         n_img_per_window=n_img_per_window,
         window_size=window_size,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        max_windows=max_windows,
     )
 
     manifest_path = video_output_dir / "manifest.json"
     write_manifest(manifest, manifest_path)
     return manifest, manifest_path
+
+
+def _resolve_scope(
+    total_frames: int,
+    effective_fps: float,
+    start_seconds: float,
+    end_seconds: float | None,
+) -> tuple[int, int]:
+    """
+    Convert the requested time range into a [first_frame, end_frame) range.
+
+    end_seconds None means "until the end of the video". Errors clearly if
+    the range falls outside the video instead of producing zero windows.
+    """
+
+    first_frame = int(round(start_seconds * effective_fps))
+    if first_frame >= total_frames:
+        raise ValueError(
+            f"start_seconds ({start_seconds}) is at or past the end of the "
+            f"video ({total_frames / effective_fps:.2f} s)."
+        )
+
+    if end_seconds is None:
+        end_frame = total_frames
+    else:
+        end_frame = min(total_frames, int(round(end_seconds * effective_fps)))
+
+    if end_frame <= first_frame:
+        raise ValueError(
+            f"The requested range [{start_seconds}, {end_seconds}] s spans "
+            "no frames. Increase end_seconds or lower start_seconds."
+        )
+
+    return first_frame, end_frame
 
 
 def _read_and_save_frames(
@@ -212,8 +268,10 @@ def _read_and_save_frames(
     Read the video once, in order, and save every planned frame.
 
     Reading sequentially (no seeking) keeps timestamps aligned even for
-    codecs with imprecise seeking. Window folders are created lazily, so a
-    window that yields no frame leaves no empty folder behind.
+    codecs with imprecise seeking. Unwanted frames are only grabbed, never
+    decoded, so skipping ahead to a late start_seconds stays cheap.
+    Window folders are created lazily, so a window that yields no frame
+    leaves no empty folder behind.
     """
 
     if not targets:
@@ -228,11 +286,14 @@ def _read_and_save_frames(
 
     try:
         while frame_index <= last_target:
-            success, frame = capture.read()
-            if not success:
+            if not capture.grab():
                 break
 
             if frame_index in targets:
+                success, frame = capture.retrieve()
+                if not success:
+                    break
+
                 window_id, local_position = targets[frame_index]
                 window = window_by_id[window_id]
 
@@ -266,6 +327,9 @@ def _build_manifest(
     n_sec_per_window: float,
     n_img_per_window: int,
     window_size: int,
+    start_seconds: float,
+    end_seconds: float | None,
+    max_windows: int | None,
 ) -> dict[str, Any]:
     """Assemble the processing manifest for the whole video."""
 
@@ -304,6 +368,9 @@ def _build_manifest(
         "n_sec_per_window": n_sec_per_window,
         "n_img_per_window": n_img_per_window,
         "frames_per_window": window_size,
+        "start_seconds": start_seconds,
+        "end_seconds": end_seconds,
+        "max_windows": max_windows,
         "total_windows": len(windows),
         "full_windows": full_windows,
         "has_partial_window": bool(windows) and not windows[-1]["is_full"],

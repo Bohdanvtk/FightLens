@@ -31,5 +31,43 @@ video:
   #           metadata. Must be a positive number.
   fps_override: null
 
+  # Where extraction starts, in seconds from the beginning of the video.
+  # Lets a long fight be processed piece by piece.
+  start_seconds: 0
+
+  # Where extraction stops, in seconds. null -> until the end of the video.
+  end_seconds: null
+
+  # Maximum number of windows to keep (applied after start/end).
+  # null -> no limit. Handy to cap how many Gemini requests the
+  # description step will later make.
+  max_windows: 5
+
 # Note: the final, shorter-than-full slice of the video is NOT discarded.
 # It becomes the last (partial) window so no footage is lost.
+
+descriptions:
+  # Manifest produced by the extraction step; lists the windows to describe.
+  manifest_path: "data/processed/test_video/manifest.json"
+
+  # JSON file where window descriptions are accumulated.
+  # Windows already present here are skipped, so re-running is safe.
+  output_path: "data/descriptions.json"
+
+  # Pause between Gemini requests, in seconds (free-tier rate limits).
+  request_delay_seconds: 4.0
+
+  # Extra attempts after a failed Gemini call before the window is skipped.
+  retry_attempts: 1
+
+  # Text prompt sent to Gemini together with the frames of one window.
+  prompt: |
+    You are an expert boxing analyst.
+    The following images are sequential frames from one short clip (about two seconds) of a boxing match, in chronological order (first image = earliest moment, last image = latest). Read them as a short motion sequence, not as separate independent images.
+
+    1. First identify the two fighters by appearance (shorts color, glove color, any distinctive features), then refer to them ONLY that way (e.g. "the fighter in red shorts").
+    2. Describe what happens across the clip as ONE continuous action (not frame by frame): who attacks, punch type (jab / cross / hook / uppercut), target (head / body), result (landed / blocked / missed / slipped), defense (slip, block, clinch, step back), who is pressuring, and ring position (center / ropes / corner).
+    3. If little or nothing significant happens (e.g. only footwork or feinting), say so plainly.
+    4. Describe ONLY what is visible. If something is unclear, say so — do not invent.
+
+    Output: 2–4 sentences of plain text using natural boxing vocabulary.

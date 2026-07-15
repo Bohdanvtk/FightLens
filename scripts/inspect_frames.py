@@ -11,17 +11,21 @@ import matplotlib.pyplot as plt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# Directory containing extracted frames.
+# Name of the processed video (subfolder of data/processed).
+VIDEO_NAME = "test_video"
+
+# Which time window to preview.
+WINDOW_ID = 0
+
+# Directory containing the frames of one extracted window.
 FRAMES_DIR = (
     PROJECT_ROOT
     / "data"
     / "processed"
-    / "test_video"
-
+    / VIDEO_NAME
+    / "windows"
+    / f"window_{WINDOW_ID:06d}"
 )
-
-# Sampling step used when frames were extracted.
-FRAME_STEP = 1
 
 # Number of frames displayed in one window.
 FRAMES_PER_PAGE = 2
@@ -57,22 +61,27 @@ def get_frame_paths(frames_dir: Path) -> list[Path]:
     return frame_paths
 
 
-def get_frame_label(image_position: int) -> int:
+def get_frame_label(frame_path: Path) -> str:
     """
-    Return the frame label according to FRAME_STEP.
+    Build the frame label from the encoded file name.
 
-    For FRAME_STEP = 30:
+    File names look like:
 
-        position 0 -> frame 1
-        position 1 -> frame 30
-        position 2 -> frame 60
-        position 3 -> frame 90
+        img_00_frame_00000059_0000001.97s.jpg
+
+    which encodes the local position, source frame index, and timestamp.
     """
 
-    if image_position == 0:
-        return 1
+    stem = frame_path.stem  # img_00_frame_00000059_0000001.97s
 
-    return image_position * FRAME_STEP
+    try:
+        rest = stem.split("_frame_")[1]  # 00000059_0000001.97s
+        frame_index = int(rest.split("_")[0])
+        timestamp = float(rest.split("_")[1].rstrip("s"))
+    except (IndexError, ValueError):
+        return frame_path.name
+
+    return f"Source frame: {frame_index}  |  Time: {timestamp:.2f} s"
 
 
 def show_page(
@@ -93,7 +102,7 @@ def show_page(
     )
 
     figure.suptitle(
-        f"Extracted Frames — Step {FRAME_STEP} "
+        f"Window {WINDOW_ID} — {VIDEO_NAME} "
         f"— Page {page_number}/{total_pages}",
         fontsize=16,
         fontweight="bold",
@@ -115,14 +124,13 @@ def show_page(
             cv2.COLOR_BGR2RGB,
         )
 
-        frame_label = get_frame_label(global_position)
         axis = axes[local_position, 0]
 
         axis.imshow(image)
 
         axis.set_title(
             f"Sample {global_position + 1}  |  "
-            f"Source frame: {frame_label}",
+            f"{get_frame_label(frame_path)}",
             loc="left",
             fontsize=12,
             fontweight="bold",
@@ -140,11 +148,6 @@ def show_page(
 
 
 def main() -> None:
-    if FRAME_STEP <= 0:
-        raise ValueError(
-            "FRAME_STEP must be greater than zero."
-        )
-
     if FRAMES_PER_PAGE <= 0:
         raise ValueError(
             "FRAMES_PER_PAGE must be greater than zero."

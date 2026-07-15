@@ -32,7 +32,7 @@ Fight video
 - [x] Time-window splitting with evenly sampled frames
 - [x] Per-window folders and a processing manifest
 - [x] Frame visualization with source-frame labels
-- [ ] Automatic Gemini frame descriptions
+- [x] Automatic Gemini frame descriptions
 - [ ] Text embedding generation
 - [ ] Semantic search index
 - [ ] LLM reranking
@@ -44,9 +44,7 @@ FightLens is connected to the Gemini API through the `google-genai` SDK.
 
 The API key and model name are loaded from environment variables, keeping sensitive credentials outside the source code.
 
-Gemini will later be used to generate semantic descriptions of fight clips and frames.
-
-The current frame-extraction pipeline does not automatically call Gemini, so preprocessing does not consume API tokens.
+Gemini generates a description per extracted time window (see below). Frame extraction and description generation are two **separate** commands, so preprocessing never consumes API tokens.
 
 ## Time-window frame extraction
 
@@ -58,6 +56,11 @@ Two parameters control this:
 - `n_img_per_window` — how many frames to keep from each window. They are sampled **evenly** across the whole window (not the first N in a row), with the first and last picks near the window boundaries.
 
 FPS is read automatically from the video metadata. An optional `fps_override` acts as a fallback for videos with missing or broken metadata. The final, shorter-than-full slice of the video is **not** discarded — it becomes the last (partial) window.
+
+The processed scope can be limited so only part of a long fight is extracted (and later described, keeping token costs under control):
+
+- `start_seconds` / `end_seconds` — bound the extracted time range (`end_seconds: null` = until the end of the video). Timestamps stay relative to the original video.
+- `max_windows` — cap on how many windows are kept (`null` = no limit).
 
 ### Output layout
 
@@ -77,9 +80,27 @@ Each image name encodes its local position in the window, its source frame index
 
 All parameters are configured through YAML.
 
+## Gemini window descriptions
+
+A separate step sends each extracted window to Gemini: all of the window's frames go into **one** multimodal request, in chronological order, together with a boxing-analyst prompt. Gemini reads them as a short motion sequence and answers with 2–4 sentences describing the action (who attacks, punch type, target, result, defense, ring position).
+
+The results accumulate in a JSON file (`descriptions.output_path`), one entry per window:
+
+```json
+{
+  "window_id": "window_000000",
+  "start_sec": 0.0,
+  "end_sec": 2.0,
+  "frames": ["data/processed/test_video/windows/window_000000/img_00_....jpg"],
+  "description": "The fighter in red shorts ..."
+}
+```
+
+The step is idempotent: windows already present in the JSON are skipped, and the file is saved after every window, so an interrupted run can simply be restarted. Requests run sequentially with a configurable pause between calls (`request_delay_seconds`, for free-tier rate limits), and a failed call is retried once.
+
 ## Frame sampling preview
 
-The extracted frames can be displayed in a vertical sequence with labels showing their positions in the original video.
+The frames of a single window can be displayed in a vertical sequence with source-frame and timestamp labels parsed from the file names (see `scripts/inspect_frames.py`, `VIDEO_NAME` / `WINDOW_ID`).
 
 ![Extracted frames preview](docs/images/result.png)
 
@@ -87,16 +108,23 @@ The extracted frames can be displayed in a vertical sequence with labels showing
 
 ## Running the project
 
-Configure the input video, window duration, and images per window in:
+Configure the input video, window duration, images per window, and the descriptions step in:
 
 ```text
 configs/default.yaml
 ```
 
-Then run:
+Then run the two pipeline steps separately:
 
 ```bash
-python -m fightlens
+# 1. Extract window frames (no API calls, spends no tokens).
+python -m fightlens extract
+
+# 2. Generate Gemini descriptions for the extracted windows.
+python -m fightlens describe
+
+# Or both steps in one go:
+python -m fightlens full
 ```
 
-The application reads the YAML configuration and starts the video preprocessing pipeline.
+`python -m fightlens` without a command still runs extraction only. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`).

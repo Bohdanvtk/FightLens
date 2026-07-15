@@ -90,6 +90,17 @@ def test_build_windows_shorter_than_one_window():
     assert windows[0]["available_frames"] == 10
 
 
+def test_build_windows_with_start_frame_offsets_the_ranges():
+    windows = build_windows(total_frames=180, window_size=60, start_frame=60)
+
+    # Frames [60, 180) -> two full windows starting at the offset.
+    assert len(windows) == 2
+    assert windows[0]["window_id"] == 0
+    assert windows[0]["first_source_frame"] == 60
+    assert windows[0]["last_source_frame"] == 119
+    assert windows[-1]["last_source_frame"] == 179
+
+
 # ---------------------------------------------------------------------------
 # Pure logic: select_frame_indices
 # ---------------------------------------------------------------------------
@@ -191,6 +202,19 @@ def test_validate_video_config_accepts_valid_config():
     assert params["n_sec_per_window"] == 2.0
     assert params["n_img_per_window"] == 6
     assert params["fps_override"] is None
+    # Scope keys default to "process the whole video".
+    assert params["start_seconds"] == 0.0
+    assert params["end_seconds"] is None
+    assert params["max_windows"] is None
+
+
+def test_validate_video_config_accepts_scope_keys():
+    cfg = _valid_config()
+    cfg.update(start_seconds=10, end_seconds=30.5, max_windows=5)
+    params = validate_video_config(cfg)
+    assert params["start_seconds"] == 10.0
+    assert params["end_seconds"] == 30.5
+    assert params["max_windows"] == 5
 
 
 def test_validate_video_config_accepts_manual_fps():
@@ -211,6 +235,11 @@ def test_validate_video_config_accepts_manual_fps():
         (lambda c: c.update(n_img_per_window=2.5), "n_img_per_window"),
         (lambda c: c.update(fps_override=0), "fps_override"),
         (lambda c: c.update(fps_override=-5), "fps_override"),
+        (lambda c: c.update(start_seconds=-1), "start_seconds"),
+        (lambda c: c.update(end_seconds=0), "end_seconds"),
+        (lambda c: c.update(start_seconds=10, end_seconds=5), "end_seconds"),
+        (lambda c: c.update(max_windows=0), "max_windows"),
+        (lambda c: c.update(max_windows=2.5), "max_windows"),
     ],
 )
 def test_validate_video_config_rejects_bad_values(mutate, match):
@@ -292,6 +321,66 @@ def test_extract_windows_very_short_video(tmp_path):
     frame_ids = [frame_index_from_name(name) for name in saved]
     assert frame_ids == [0, 1, 2, 3]
     assert len(set(frame_ids)) == len(frame_ids)
+
+
+def test_extract_windows_scope_limits_the_processed_range(tmp_path):
+    # 10 seconds of video at 30 fps.
+    video_path = make_video(tmp_path / "raw" / "clip.mp4", frame_count=300, fps=30)
+
+    manifest, manifest_path = extract_windows(
+        video_path=video_path,
+        output_dir=tmp_path / "out",
+        n_sec_per_window=2,
+        n_img_per_window=3,
+        fps_override=30,
+        start_seconds=2.0,
+        end_seconds=8.0,
+    )
+
+    # Frames [60, 240) -> exactly 3 full 2-second windows.
+    assert manifest["total_windows"] == 3
+    assert manifest["start_seconds"] == 2.0
+    assert manifest["end_seconds"] == 8.0
+
+    first = manifest["windows"][0]
+    # Timestamps stay relative to the original video, not the scope.
+    assert first["first_source_frame"] == 60
+    assert first["start_timestamp"] == 2.0
+    assert manifest["windows"][-1]["end_timestamp"] == 8.0
+    assert len(window_dirs(manifest_path)) == 3
+
+
+def test_extract_windows_max_windows_caps_the_output(tmp_path):
+    video_path = make_video(tmp_path / "raw" / "clip.mp4", frame_count=300, fps=30)
+
+    manifest, manifest_path = extract_windows(
+        video_path=video_path,
+        output_dir=tmp_path / "out",
+        n_sec_per_window=2,
+        n_img_per_window=3,
+        fps_override=30,
+        max_windows=2,
+    )
+
+    # 5 windows would fit; only the first 2 are kept.
+    assert manifest["total_windows"] == 2
+    assert manifest["max_windows"] == 2
+    assert len(window_dirs(manifest_path)) == 2
+    assert manifest["windows"][-1]["end_timestamp"] == 4.0
+
+
+def test_extract_windows_start_past_video_end_errors(tmp_path):
+    video_path = make_video(tmp_path / "raw" / "clip.mp4", frame_count=60, fps=30)
+
+    with pytest.raises(ValueError, match="start_seconds"):
+        extract_windows(
+            video_path=video_path,
+            output_dir=tmp_path / "out",
+            n_sec_per_window=2,
+            n_img_per_window=3,
+            fps_override=30,
+            start_seconds=100.0,
+        )
 
 
 def test_extract_windows_manual_fps_override_changes_window_size(tmp_path):
