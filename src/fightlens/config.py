@@ -217,6 +217,37 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
     }
 
 
+def validate_error_log_dir(value: Any) -> str:
+    """
+    Validate the top-level 'error_log_dir' configuration value.
+
+    The parameter is top-level (not inside 'descriptions') because the
+    error log covers the whole launch, extraction included.
+
+    Args:
+        value: The 'error_log_dir' value from the loaded configuration,
+            or None when the key is absent (defaults to "logs").
+
+    Returns:
+        The directory as a string (relative paths are resolved from the
+        project root by the caller).
+
+    Raises:
+        ValueError: If the value is present but not a non-empty string.
+    """
+
+    if value is None:
+        return "logs"
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            "error_log_dir must be a non-empty string path to the "
+            f"directory for per-run error JSON files, got: {value!r}."
+        )
+
+    return value
+
+
 def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
     """
     Validate the 'descriptions' section of the configuration.
@@ -228,7 +259,7 @@ def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
     Returns:
         A mapping of validated parameters:
             "manifest_path", "output_path", "request_delay_seconds",
-            "retry_attempts", "prompt".
+            "retry_attempts", "response_timeout_seconds", "prompt".
 
     Raises:
         ValueError: If any parameter is missing or invalid.
@@ -273,6 +304,18 @@ def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
             f"(extra attempts after a failed call), got: {retry_attempts!r}."
         )
 
+    response_timeout_seconds = descriptions_config.get(
+        "response_timeout_seconds", 30
+    )
+    if response_timeout_seconds is not None and not _is_positive_number(
+        response_timeout_seconds
+    ):
+        raise ValueError(
+            "descriptions.response_timeout_seconds must be a positive "
+            "number or null (max seconds to wait for one Gemini response, "
+            f"null = wait forever), got: {response_timeout_seconds!r}."
+        )
+
     prompt = descriptions_config.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError(
@@ -285,5 +328,10 @@ def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
         "output_path": output_path,
         "request_delay_seconds": float(request_delay_seconds),
         "retry_attempts": retry_attempts,
+        "response_timeout_seconds": (
+            float(response_timeout_seconds)
+            if response_timeout_seconds is not None
+            else None
+        ),
         "prompt": prompt,
     }

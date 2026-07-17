@@ -30,6 +30,9 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 
+# Per-run error logs (errors_<date>_<time>.json)
+logs/
+
 # OS generated files
 .DS_Store
 Thumbs.db

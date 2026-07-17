@@ -41,10 +41,16 @@ video:
   # Maximum number of windows to keep (applied after start/end).
   # null -> no limit. Handy to cap how many Gemini requests the
   # description step will later make.
-  max_windows: 5
+  max_windows: null
 
 # Note: the final, shorter-than-full slice of the video is NOT discarded.
 # It becomes the last (partial) window so no footage is lost.
+
+# Directory where the per-run error JSON files are written
+# (one file per launch, named errors_<date>_<time>.json).
+# A relative path is resolved from the project root. The file is only
+# created if at least one error happened during the run.
+error_log_dir: "logs"
 
 descriptions:
   # Manifest produced by the extraction step; lists the windows to describe.
@@ -55,10 +61,21 @@ descriptions:
   output_path: "data/descriptions.json"
 
   # Pause between Gemini requests, in seconds (free-tier rate limits).
-  request_delay_seconds: 4.0
+  request_delay_seconds: 2
 
   # Extra attempts after a failed Gemini call before the window is skipped.
+  # A timed-out call (see response_timeout_seconds) counts as a failed
+  # attempt too, so with retry_attempts: 1 each window gets at most
+  # 2 requests before it is skipped and the run moves on.
   retry_attempts: 1
+
+  # Maximum seconds to wait for one Gemini response.
+  # If no answer arrives in time, the stuck request is abandoned, the
+  # timeout is printed to the console and saved to the per-run error
+  # JSON (logs/errors_<date>_<time>.json), and a fresh request is sent —
+  # so one hanging call never stalls the whole run.
+  # null -> wait forever (no timeout).
+  response_timeout_seconds: 40
 
   # Text prompt sent to Gemini together with the frames of one window.
   prompt: |

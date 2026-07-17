@@ -5,9 +5,11 @@ from fightlens.config import (
     load_config,
     resolve_project_path,
     validate_descriptions_config,
+    validate_error_log_dir,
     validate_video_config,
 )
 from fightlens.describe import describe_windows
+from fightlens.errorlog import ErrorLog
 from fightlens.video import extract_windows
 
 
@@ -46,11 +48,31 @@ def main() -> None:
     args = parser.parse_args()
     config = load_config()
 
-    # Running without a command keeps the old behaviour: extraction only.
-    if args.command in (None, "extract", "full"):
-        _run_extract(config)
-    if args.command in ("describe", "full"):
-        _run_describe(config)
+    # One error log per launch; its JSON file is named after the exact
+    # start date and time and is only created if an error is recorded.
+    # The directory comes from the config (error_log_dir, default "logs").
+    error_log = ErrorLog(
+        log_dir=resolve_project_path(
+            validate_error_log_dir(config.get("error_log_dir"))
+        )
+    )
+
+    try:
+        # Running without a command keeps the old behaviour: extraction only.
+        if args.command in (None, "extract", "full"):
+            _run_extract(config)
+        if args.command in ("describe", "full"):
+            _run_describe(config, error_log)
+    except Exception as error:
+        # A fatal error still ends up in the per-run error file.
+        error_log.record(where="run", error=error)
+        raise
+    finally:
+        if error_log.count:
+            print(
+                f"Errors this run: {error_log.count} "
+                f"(saved to {error_log.path})"
+            )
 
 
 def _run_extract(config: dict[str, Any]) -> None:
@@ -78,7 +100,7 @@ def _run_extract(config: dict[str, Any]) -> None:
     _print_extract_summary(manifest, manifest_path)
 
 
-def _run_describe(config: dict[str, Any]) -> None:
+def _run_describe(config: dict[str, Any], error_log: ErrorLog) -> None:
     """Generate a Gemini description for every extracted window."""
 
     params = validate_descriptions_config(config.get("descriptions"))
@@ -89,6 +111,8 @@ def _run_describe(config: dict[str, Any]) -> None:
         request_delay_seconds=params["request_delay_seconds"],
         prompt=params["prompt"],
         retry_attempts=params["retry_attempts"],
+        timeout_seconds=params["response_timeout_seconds"],
+        error_log=error_log,
     )
 
     _print_describe_summary(summary)
