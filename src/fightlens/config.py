@@ -301,3 +301,26 @@ def validate_embedding_config(embedding_config: Any) -> dict[str, Any]:
         "device": device,
         "normalize": normalize,
     }
+
+
+def validate_search_config(search_config: Any) -> dict[str, Any]:
+    """Validate the 'search' config section (top_k is how many results to print)."""
+
+    if not isinstance(search_config, dict):
+        raise ValueError(
+            "The configuration must contain a 'search' section "
+            "(a YAML mapping)."
+        )
+
+    top_k = search_config.get("top_k", 10)
+    if (
+        isinstance(top_k, bool)
+        or not isinstance(top_k, int)
+        or top_k <= 0
+    ):
+        raise ValueError(
+            "search.top_k must be a positive integer "
+            f"(how many results to print), got: {top_k!r}."
+        )
+
+    return {"top_k": top_k}

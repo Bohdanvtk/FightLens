@@ -34,7 +34,7 @@ Fight video
 - [x] Frame visualization with source-frame labels
 - [x] Automatic Gemini frame descriptions
 - [x] Text embedding generation
-- [ ] Semantic search index
+- [x] Semantic search (embeddings.npz doubles as the index — no separate index step)
 - [ ] LLM reranking
 - [ ] Final video search interface
 
@@ -113,6 +113,25 @@ It is configured under `embedding:` in the YAML:
 - `device` — `auto` (let the model pick cuda/cpu), or force `cpu` / `cuda`.
 - `normalize` — L2-normalize each vector (default `true`).
 
+## Semantic search
+
+The final, **purely local and read-only** step: search a video's windows with a natural-language query.
+
+```bash
+python -m fightlens search "clinch near the ropes"
+```
+
+There is no separate index-building step — `embeddings.npz` (written by Step 4) already holds every window's normalized vector, so it's loaded and matrix-multiplied directly. The query string is encoded with the exact same local Embedder (same `embedding:` config) that produced the stored vectors, so both live in the same vector space; since the vectors are already L2-normalized, cosine similarity is just a dot product. Results are joined back to `descriptions.json` by `window_id` to print each match's timecode and description, ranked by similarity, highest first.
+
+It is configured under `search:` in the YAML:
+
+- `top_k` — how many top matches to print (default `10`).
+
+Notes:
+
+- The query must be in **English** — descriptions are generated in English and the default `all-MiniLM-L6-v2` model is English-centric.
+- This step makes no Gemini or other API calls and writes nothing to disk (no artifact, no manifest changes).
+
 ## Per-video manifest as the artifact index
 
 Each video's `manifest.json` is the single index of that video's artifacts. The data files stay pure and never point at each other; instead every step registers what it produced under an `"artifacts"` section (written atomically, only after the data file is fully saved):
@@ -152,8 +171,11 @@ python -m fightlens describe
 # 3. Embed the window descriptions locally (no API calls, spends no tokens).
 python -m fightlens embed
 
+# 4. Search the embedded windows with a natural-language query (no API calls).
+python -m fightlens search "clinch near the ropes"
+
 # Or run extract + describe in one go:
 python -m fightlens full
 ```
 
-`python -m fightlens` without a command still runs extraction only. Steps 2 and 3 are separate on purpose: `describe` spends Gemini tokens, while `embed` is purely local. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`); the embedding model and device live in `embedding:` (`model_name`, `batch_size`, `device`, `normalize`).
+`python -m fightlens` without a command still runs extraction only. Steps 2 and 3 are separate on purpose: `describe` spends Gemini tokens, while `embed` and `search` are purely local. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`); the embedding model and device live in `embedding:` (`model_name`, `batch_size`, `device`, `normalize`); how many search results to print lives in `search:` (`top_k`).

@@ -108,3 +108,8 @@ embedding:
 
   # L2-normalize each vector so Step 5 similarity is a plain dot product.
   normalize: true
+
+search:
+  # How many top matches to print for a query
+  # (python -m fightlens search "clinch near the ropes").
+  top_k: 10

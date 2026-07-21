@@ -7,6 +7,7 @@ from fightlens.config import (
     validate_descriptions_config,
     validate_embedding_config,
     validate_error_log_dir,
+    validate_search_config,
     validate_video_config,
     video_processed_dir,
 )
@@ -14,11 +15,12 @@ from fightlens.describe import describe_windows
 from fightlens.embed import embed_windows
 from fightlens.embeddings import Embedder
 from fightlens.errorlog import ErrorLog
+from fightlens.search import Retriever, format_results
 from fightlens.video import extract_windows
 
 
 def main() -> None:
-    """Run one pipeline step (extract/describe/embed/full — see --help). Config: configs/default.yaml."""
+    """Run one pipeline step (extract/describe/embed/search/full — see --help). Config: configs/default.yaml."""
 
     parser = argparse.ArgumentParser(
         prog="fightlens",
@@ -41,6 +43,11 @@ def main() -> None:
         "full",
         help="Run extract, then describe.",
     )
+    search_parser = subparsers.add_parser(
+        "search",
+        help="Search a video's windows by natural-language query (no API calls).",
+    )
+    search_parser.add_argument("query", help="Natural-language query to search for.")
 
     args = parser.parse_args()
     config = load_config()
@@ -62,6 +69,8 @@ def main() -> None:
             _run_describe(config, error_log)
         if args.command == "embed":
             _run_embed(config)
+        if args.command == "search":
+            _run_search(config, args.query)
     except Exception as error:
         # A fatal error still ends up in the per-run error file.
         error_log.record(where="run", error=error)
@@ -148,6 +157,33 @@ def _run_embed(config: dict[str, Any]) -> None:
     )
 
     _print_embed_summary(summary)
+
+
+def _run_search(config: dict[str, Any], query: str) -> None:
+    """Rank a video's embedded windows against `query` and print the top matches (no API calls)."""
+
+    search_params = validate_search_config(config.get("search"))
+    embedding_params = validate_embedding_config(config.get("embedding"))
+
+    # Same per-video processed folder, and the same Embedder construction,
+    # as _run_embed — the query must land in the same vector space as the
+    # stored window vectors.
+    processed_dir = video_processed_dir(config)
+
+    embedder = Embedder(
+        model_name=embedding_params["model_name"],
+        device=embedding_params["device"],
+        normalize=embedding_params["normalize"],
+        batch_size=embedding_params["batch_size"],
+    )
+
+    retriever = Retriever.from_paths(
+        embeddings_path=processed_dir / "embeddings.npz",
+        descriptions_path=processed_dir / "descriptions.json",
+        embedder=embedder,
+    )
+    results = retriever.search(query, search_params["top_k"])
+    format_results(query, results, total=len(retriever))
 
 
 def _print_extract_summary(manifest: dict[str, Any], manifest_path: Any) -> None:
