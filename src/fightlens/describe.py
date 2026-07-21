@@ -1,8 +1,7 @@
 """Gemini descriptions for extracted time windows.
 
-Runs as a separate step AFTER frame extraction, so extracting frames never
-spends API tokens. Each window folder becomes one multimodal Gemini request:
-all of its frames in chronological order plus the description prompt.
+A separate step after extraction (extraction never spends tokens). Each
+window's frames go into one multimodal Gemini request, chronologically.
 """
 
 import json
@@ -11,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from fightlens import gemini
+from fightlens.atomic import atomic_write
 from fightlens.config import resolve_project_path
 from fightlens.errorlog import ErrorLog
-from fightlens.video import WINDOW_ID_WIDTH
+from fightlens.video import WINDOW_ID_WIDTH, register_artifact
 
 
 def load_manifest(manifest_path: str | Path) -> dict[str, Any]:
@@ -51,12 +51,12 @@ def load_descriptions(output_path: str | Path) -> list[dict[str, Any]]:
 def write_descriptions(
     entries: list[dict[str, Any]], output_path: str | Path
 ) -> None:
-    """Write the descriptions as pretty-printed JSON."""
+    """Write the descriptions as pretty-printed JSON, atomically."""
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as file:
-        json.dump(entries, file, indent=2, ensure_ascii=False)
+    atomic_write(
+        output_path,
+        lambda file: json.dump(entries, file, indent=2, ensure_ascii=False),
+    )
 
 
 def window_name(window_id: int) -> str:
@@ -75,20 +75,11 @@ def describe_windows(
     error_log: ErrorLog | None = None,
 ) -> dict[str, Any]:
     """
-    Generate a Gemini description for every extracted window.
+    Describe every window via Gemini; idempotent (already-described windows are skipped).
 
-    Windows are processed sequentially with a pause between API calls
-    (free-tier rate limits). The run is idempotent: windows that already
-    have a description in the output JSON are skipped, and the JSON is
-    saved after every window so an interrupted run loses nothing.
-
-    A call that errors OR takes longer than timeout_seconds counts as one
-    failed attempt: it is reported to the console (and to error_log when
-    given) and a fresh request is sent, up to retry_attempts extra times.
-    A window whose attempts are all spent is put on the "failed" list and
-    the loop moves on to the next window, so one bad or stuck window
-    never blocks the run.
-    Returns a summary with "described", "skipped" and "failed" counts.
+    A failed or timed-out call is retried up to retry_attempts times, then the
+    window goes on the "failed" list and the run moves on. Returns a summary
+    with "described", "skipped" and "failed" counts.
     """
 
     manifest = load_manifest(manifest_path)
@@ -150,6 +141,17 @@ def describe_windows(
         write_descriptions(entries, output_path)
         described += 1
 
+    # Register the artifact last, now that the JSON is fully written.
+    register_artifact(
+        manifest_path,
+        "descriptions",
+        {
+            "path": Path(output_path).name,
+            "model": gemini.GEMINI_MODEL,
+            "count": len(entries),
+        },
+    )
+
     return {
         "total_windows": len(manifest["windows"]),
         "described": described,
@@ -168,13 +170,7 @@ def _describe_with_retry(
     timeout_seconds: float | None = None,
     error_log: ErrorLog | None = None,
 ) -> str | None:
-    """Call Gemini for one window; return None once all attempts fail.
-
-    Every attempt is timed. An answer that does not arrive within
-    timeout_seconds is abandoned and counted as a failed attempt, exactly
-    like an API error, so a window is never waited on forever: after
-    1 + retry_attempts attempts it is given up and the caller moves on.
-    """
+    """Call Gemini for one window with retries; return None once all attempts fail or time out."""
 
     total_attempts = 1 + retry_attempts
 

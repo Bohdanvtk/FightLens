@@ -54,11 +54,11 @@ error_log_dir: "logs"
 
 descriptions:
   # Manifest produced by the extraction step; lists the windows to describe.
+  # The descriptions JSON is written next to this manifest, inside the same
+  # per-video processed folder (data/processed/<video>/descriptions.json), so
+  # every video's artifacts stay self-contained. Windows already present in
+  # that file are skipped, so re-running is safe.
   manifest_path: "data/processed/test_video/manifest.json"
-
-  # JSON file where window descriptions are accumulated.
-  # Windows already present here are skipped, so re-running is safe.
-  output_path: "data/descriptions.json"
 
   # Pause between Gemini requests, in seconds (free-tier rate limits).
   request_delay_seconds: 2
@@ -88,3 +88,23 @@ descriptions:
     4. Describe ONLY what is visible. If something is unclear, say so — do not invent.
 
     Output: 2–4 sentences of plain text using natural boxing vocabulary.
+
+embedding:
+  # Local sentence-transformers model turning each window description into a
+  # vector. This step is PURELY local: it never calls Gemini or any paid API.
+  # The first run downloads and caches the model (~80MB) from Hugging Face.
+  #
+  # all-MiniLM-L6-v2 outputs 384-dimensional vectors. The dimension is fixed
+  # by the model, so it is not a config key.
+  model_name: "all-MiniLM-L6-v2"
+
+  # How many descriptions to encode per forward pass.
+  batch_size: 32
+
+  # Device to run the model on:
+  # "auto" -> let sentence-transformers pick (cuda if available, else cpu)
+  # "cpu" / "cuda" -> force that device.
+  device: "auto"
+
+  # L2-normalize each vector so Step 5 similarity is a plain dot product.
+  normalize: true

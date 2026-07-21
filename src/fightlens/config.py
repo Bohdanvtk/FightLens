@@ -4,19 +4,7 @@ from typing import Any
 import yaml
 
 
-# Absolute path to the root directory of the FightLens project.
-#
-# __file__:
-#   fightlens/src/fightlens/config.py
-#
-# parents[0]:
-#   fightlens/src/fightlens
-#
-# parents[1]:
-#   fightlens/src
-#
-# parents[2]:
-#   fightlens
+# Absolute path to the project root (3 levels up from src/fightlens/config.py).
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Default configuration file used by the application.
@@ -24,19 +12,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "default.yaml"
 
 
 def load_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
-    """
-    Load the FightLens configuration from a YAML file.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-
-    Returns:
-        Configuration represented as a Python dictionary.
-
-    Raises:
-        FileNotFoundError: If the YAML file does not exist.
-        ValueError: If the YAML file is empty or invalid.
-    """
+    """Load the YAML config into a dict. Raises FileNotFoundError / ValueError if missing or invalid."""
 
     config_path = Path(config_path)
 
@@ -57,18 +33,7 @@ def load_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]
 
 
 def resolve_project_path(path: str | Path) -> Path:
-    """
-    Convert a configuration path into an absolute path.
-
-    Absolute paths are returned unchanged.
-    Relative paths are resolved from PROJECT_ROOT.
-
-    Example:
-        "data/raw/fight.mp4"
-
-    becomes:
-        "/home/bohdan/PycharmProjects/fightlens/data/raw/fight.mp4"
-    """
+    """Resolve a config path to an absolute one (relative paths resolve from PROJECT_ROOT)."""
 
     path = Path(path)
 
@@ -78,7 +43,7 @@ def resolve_project_path(path: str | Path) -> Path:
     return PROJECT_ROOT / path
 
 
-def _is_positive_number(value: Any) -> bool:
+def is_positive_number(value: Any) -> bool:
     """True for a strictly positive int or float (but not bool)."""
 
     return (
@@ -88,7 +53,7 @@ def _is_positive_number(value: Any) -> bool:
     )
 
 
-def _is_non_negative_number(value: Any) -> bool:
+def is_non_negative_number(value: Any) -> bool:
     """True for a zero-or-positive int or float (but not bool)."""
 
     return (
@@ -99,24 +64,7 @@ def _is_non_negative_number(value: Any) -> bool:
 
 
 def validate_video_config(video_config: Any) -> dict[str, Any]:
-    """
-    Validate the 'video' section of the configuration.
-
-    Every error message names the offending parameter, the value that
-    was received, and what was expected. Nothing is silently defaulted.
-
-    Args:
-        video_config: The 'video' section from the loaded configuration.
-
-    Returns:
-        A mapping of validated parameters:
-            "input_path", "output_dir",
-            "n_sec_per_window", "n_img_per_window", "fps_override",
-            "start_seconds", "end_seconds", "max_windows".
-
-    Raises:
-        ValueError: If any parameter is missing or invalid.
-    """
+    """Validate the 'video' config section; raises ValueError naming the bad key and value."""
 
     if not isinstance(video_config, dict):
         raise ValueError(
@@ -139,7 +87,7 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
         )
 
     n_sec_per_window = video_config.get("n_sec_per_window")
-    if not _is_positive_number(n_sec_per_window):
+    if not is_positive_number(n_sec_per_window):
         raise ValueError(
             "video.n_sec_per_window must be a positive number "
             f"(window duration in seconds), got: {n_sec_per_window!r}."
@@ -163,14 +111,14 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
         )
 
     fps_override = video_config.get("fps_override")
-    if fps_override is not None and not _is_positive_number(fps_override):
+    if fps_override is not None and not is_positive_number(fps_override):
         raise ValueError(
             "video.fps_override must be a positive number or null "
             f"(manual FPS fallback), got: {fps_override!r}."
         )
 
     start_seconds = video_config.get("start_seconds", 0)
-    if not _is_non_negative_number(start_seconds):
+    if not is_non_negative_number(start_seconds):
         raise ValueError(
             "video.start_seconds must be zero or a positive number "
             f"(where extraction starts), got: {start_seconds!r}."
@@ -178,7 +126,7 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
 
     end_seconds = video_config.get("end_seconds")
     if end_seconds is not None:
-        if not _is_positive_number(end_seconds):
+        if not is_positive_number(end_seconds):
             raise ValueError(
                 "video.end_seconds must be a positive number or null "
                 f"(null = end of video), got: {end_seconds!r}."
@@ -218,23 +166,7 @@ def validate_video_config(video_config: Any) -> dict[str, Any]:
 
 
 def validate_error_log_dir(value: Any) -> str:
-    """
-    Validate the top-level 'error_log_dir' configuration value.
-
-    The parameter is top-level (not inside 'descriptions') because the
-    error log covers the whole launch, extraction included.
-
-    Args:
-        value: The 'error_log_dir' value from the loaded configuration,
-            or None when the key is absent (defaults to "logs").
-
-    Returns:
-        The directory as a string (relative paths are resolved from the
-        project root by the caller).
-
-    Raises:
-        ValueError: If the value is present but not a non-empty string.
-    """
+    """Validate the top-level 'error_log_dir' (covers the whole run, not just 'descriptions'). Defaults to "logs"."""
 
     if value is None:
         return "logs"
@@ -249,21 +181,7 @@ def validate_error_log_dir(value: Any) -> str:
 
 
 def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
-    """
-    Validate the 'descriptions' section of the configuration.
-
-    Args:
-        descriptions_config: The 'descriptions' section from the loaded
-            configuration.
-
-    Returns:
-        A mapping of validated parameters:
-            "manifest_path", "output_path", "request_delay_seconds",
-            "retry_attempts", "response_timeout_seconds", "prompt".
-
-    Raises:
-        ValueError: If any parameter is missing or invalid.
-    """
+    """Validate the 'descriptions' config section (output path is derived, not configured here)."""
 
     if not isinstance(descriptions_config, dict):
         raise ValueError(
@@ -278,15 +196,8 @@ def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
             f"the extraction manifest.json, got: {manifest_path!r}."
         )
 
-    output_path = descriptions_config.get("output_path")
-    if not isinstance(output_path, str) or not output_path.strip():
-        raise ValueError(
-            "descriptions.output_path must be a non-empty string path to "
-            f"the output JSON file, got: {output_path!r}."
-        )
-
     request_delay_seconds = descriptions_config.get("request_delay_seconds", 4.0)
-    if not _is_non_negative_number(request_delay_seconds):
+    if not is_non_negative_number(request_delay_seconds):
         raise ValueError(
             "descriptions.request_delay_seconds must be zero or a positive "
             f"number (pause between Gemini calls), got: "
@@ -307,7 +218,7 @@ def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
     response_timeout_seconds = descriptions_config.get(
         "response_timeout_seconds", 30
     )
-    if response_timeout_seconds is not None and not _is_positive_number(
+    if response_timeout_seconds is not None and not is_positive_number(
         response_timeout_seconds
     ):
         raise ValueError(
@@ -325,7 +236,6 @@ def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
 
     return {
         "manifest_path": manifest_path,
-        "output_path": output_path,
         "request_delay_seconds": float(request_delay_seconds),
         "retry_attempts": retry_attempts,
         "response_timeout_seconds": (
@@ -334,4 +244,60 @@ def validate_descriptions_config(descriptions_config: Any) -> dict[str, Any]:
             else None
         ),
         "prompt": prompt,
+    }
+
+
+def video_processed_dir(config: dict[str, Any]) -> Path:
+    """Absolute path to <video.output_dir>/<video stem> — where all per-video artifacts live."""
+
+    params = validate_video_config(config.get("video"))
+    output_dir = resolve_project_path(params["output_dir"])
+    return output_dir / Path(params["input_path"]).stem
+
+
+def validate_embedding_config(embedding_config: Any) -> dict[str, Any]:
+    """Validate the 'embedding' config section (dimension is fixed by the model, not a key)."""
+
+    if not isinstance(embedding_config, dict):
+        raise ValueError(
+            "The configuration must contain an 'embedding' section "
+            "(a YAML mapping)."
+        )
+
+    model_name = embedding_config.get("model_name")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError(
+            "embedding.model_name must be a non-empty string (the local "
+            f"sentence-transformers model), got: {model_name!r}."
+        )
+
+    batch_size = embedding_config.get("batch_size", 32)
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
+        raise ValueError(
+            "embedding.batch_size must be a positive integer "
+            f"(descriptions encoded per forward pass), got: {batch_size!r}."
+        )
+
+    device = embedding_config.get("device", "auto")
+    if not isinstance(device, str) or not device.strip():
+        raise ValueError(
+            "embedding.device must be a non-empty string such as 'auto', "
+            f"'cpu' or 'cuda', got: {device!r}."
+        )
+
+    normalize = embedding_config.get("normalize", True)
+    if not isinstance(normalize, bool):
+        raise ValueError(
+            f"embedding.normalize must be true or false, got: {normalize!r}."
+        )
+
+    return {
+        "model_name": model_name,
+        "batch_size": int(batch_size),
+        "device": device,
+        "normalize": normalize,
     }

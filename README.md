@@ -33,7 +33,7 @@ Fight video
 - [x] Per-window folders and a processing manifest
 - [x] Frame visualization with source-frame labels
 - [x] Automatic Gemini frame descriptions
-- [ ] Text embedding generation
+- [x] Text embedding generation
 - [ ] Semantic search index
 - [ ] LLM reranking
 - [ ] Final video search interface
@@ -84,7 +84,7 @@ All parameters are configured through YAML.
 
 A separate step sends each extracted window to Gemini: all of the window's frames go into **one** multimodal request, in chronological order, together with a boxing-analyst prompt. Gemini reads them as a short motion sequence and answers with 2–4 sentences describing the action (who attacks, punch type, target, result, defense, ring position).
 
-The results accumulate in a JSON file (`descriptions.output_path`), one entry per window:
+The results accumulate in `descriptions.json` **inside the video's own processed folder** (`data/processed/<video>/descriptions.json`, next to `manifest.json`), so every video's artifacts stay self-contained. One entry per window:
 
 ```json
 {
@@ -97,6 +97,32 @@ The results accumulate in a JSON file (`descriptions.output_path`), one entry pe
 ```
 
 The step is idempotent: windows already present in the JSON are skipped, and the file is saved after every window, so an interrupted run can simply be restarted. Requests run sequentially with a configurable pause between calls (`request_delay_seconds`, for free-tier rate limits), and a failed call is retried once.
+
+## Local window embeddings
+
+A separate, **purely local** step turns each window's description into an embedding vector. It never calls Gemini or any paid API — it runs a [sentence-transformers](https://www.sbert.net/) model on this machine (the first run downloads and caches the model, ~80MB, from Hugging Face).
+
+For every video it reads `data/processed/<video>/descriptions.json`, encodes each window's description into a 384-dimensional, L2-normalized vector (normalizing here makes later similarity a plain dot product), and stores all vectors together in a single `data/processed/<video>/embeddings.npz` alongside their `window_ids`. Storing normalized vectors keeps the whole video's index in one small file that the search step can load directly.
+
+The step is idempotent and content-addressed: each vector is keyed by a hash of its exact description text, so re-running only re-embeds windows whose description changed (or everything, if the configured model changed — vectors from different models are not comparable). Running it twice with no input changes embeds nothing the second time.
+
+It is configured under `embedding:` in the YAML:
+
+- `model_name` — the local sentence-transformers model (default `all-MiniLM-L6-v2`, 384-dim). The output dimension is fixed by the model, so it is not a config key.
+- `batch_size` — how many descriptions to encode per forward pass (default `32`).
+- `device` — `auto` (let the model pick cuda/cpu), or force `cpu` / `cuda`.
+- `normalize` — L2-normalize each vector (default `true`).
+
+## Per-video manifest as the artifact index
+
+Each video's `manifest.json` is the single index of that video's artifacts. The data files stay pure and never point at each other; instead every step registers what it produced under an `"artifacts"` section (written atomically, only after the data file is fully saved):
+
+```json
+"artifacts": {
+  "descriptions": { "path": "descriptions.json", "model": "gemini-2.5-flash", "count": 13 },
+  "embeddings":   { "path": "embeddings.npz", "model": "all-MiniLM-L6-v2", "dim": 384, "count": 13 }
+}
+```
 
 ## Frame sampling preview
 
@@ -123,8 +149,11 @@ python -m fightlens extract
 # 2. Generate Gemini descriptions for the extracted windows.
 python -m fightlens describe
 
-# Or both steps in one go:
+# 3. Embed the window descriptions locally (no API calls, spends no tokens).
+python -m fightlens embed
+
+# Or run extract + describe in one go:
 python -m fightlens full
 ```
 
-`python -m fightlens` without a command still runs extraction only. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`).
+`python -m fightlens` without a command still runs extraction only. Steps 2 and 3 are separate on purpose: `describe` spends Gemini tokens, while `embed` is purely local. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`); the embedding model and device live in `embedding:` (`model_name`, `batch_size`, `device`, `normalize`).

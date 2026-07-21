@@ -5,27 +5,20 @@ from fightlens.config import (
     load_config,
     resolve_project_path,
     validate_descriptions_config,
+    validate_embedding_config,
     validate_error_log_dir,
     validate_video_config,
+    video_processed_dir,
 )
 from fightlens.describe import describe_windows
+from fightlens.embed import embed_windows
+from fightlens.embeddings import Embedder
 from fightlens.errorlog import ErrorLog
 from fightlens.video import extract_windows
 
 
 def main() -> None:
-    """
-    Run one step of the FightLens pipeline.
-
-    Commands:
-        extract  — split the video into time windows and save sampled
-                   frames (no API calls, spends no tokens). Default.
-        describe — send each extracted window to Gemini and save the
-                   descriptions JSON (spends API tokens).
-        full     — run extract, then describe.
-
-    All parameters are read from configs/default.yaml.
-    """
+    """Run one pipeline step (extract/describe/embed/full — see --help). Config: configs/default.yaml."""
 
     parser = argparse.ArgumentParser(
         prog="fightlens",
@@ -39,6 +32,10 @@ def main() -> None:
     subparsers.add_parser(
         "describe",
         help="Generate Gemini descriptions for extracted windows.",
+    )
+    subparsers.add_parser(
+        "embed",
+        help="Embed window descriptions locally (no Gemini calls).",
     )
     subparsers.add_parser(
         "full",
@@ -63,6 +60,8 @@ def main() -> None:
             _run_extract(config)
         if args.command in ("describe", "full"):
             _run_describe(config, error_log)
+        if args.command == "embed":
+            _run_embed(config)
     except Exception as error:
         # A fatal error still ends up in the per-run error file.
         error_log.record(where="run", error=error)
@@ -105,9 +104,15 @@ def _run_describe(config: dict[str, Any], error_log: ErrorLog) -> None:
 
     params = validate_descriptions_config(config.get("descriptions"))
 
+    # The descriptions JSON lives next to its manifest, inside the video's
+    # per-video processed folder — the same folder that holds windows/ and
+    # manifest.json — so each video's artifacts stay self-contained.
+    manifest_path = resolve_project_path(params["manifest_path"])
+    output_path = manifest_path.parent / "descriptions.json"
+
     summary = describe_windows(
-        manifest_path=resolve_project_path(params["manifest_path"]),
-        output_path=resolve_project_path(params["output_path"]),
+        manifest_path=manifest_path,
+        output_path=output_path,
         request_delay_seconds=params["request_delay_seconds"],
         prompt=params["prompt"],
         retry_attempts=params["retry_attempts"],
@@ -116,6 +121,33 @@ def _run_describe(config: dict[str, Any], error_log: ErrorLog) -> None:
     )
 
     _print_describe_summary(summary)
+
+
+def _run_embed(config: dict[str, Any]) -> None:
+    """Embed the window descriptions into a local vector store (no API calls)."""
+
+    params = validate_embedding_config(config.get("embedding"))
+
+    # descriptions.json, embeddings.npz and manifest.json all live in the same
+    # per-video processed folder, derived like windows/ and manifest.json are.
+    processed_dir = video_processed_dir(config)
+
+    embedder = Embedder(
+        model_name=params["model_name"],
+        device=params["device"],
+        normalize=params["normalize"],
+        batch_size=params["batch_size"],
+    )
+
+    summary = embed_windows(
+        descriptions_path=processed_dir / "descriptions.json",
+        embeddings_path=processed_dir / "embeddings.npz",
+        manifest_path=processed_dir / "manifest.json",
+        embedder=embedder,
+        model_name=params["model_name"],
+    )
+
+    _print_embed_summary(summary)
 
 
 def _print_extract_summary(manifest: dict[str, Any], manifest_path: Any) -> None:
@@ -156,6 +188,16 @@ def _print_describe_summary(summary: dict[str, Any]) -> None:
         print(f"Failed windows: {', '.join(summary['failed'])}")
         print("Re-run 'python -m fightlens describe' to retry them.")
     print(f"Descriptions: {summary['output_path']}")
+
+
+def _print_embed_summary(summary: dict[str, Any]) -> None:
+    """Print the single embedding summary line."""
+
+    print(
+        f"Embedding completed: {summary['total']} windows "
+        f"({summary['reused']} reused, {summary['embedded']} newly embedded, "
+        f"{summary['dropped']} dropped). Vectors: {summary['output_path']}"
+    )
 
 
 if __name__ == "__main__":

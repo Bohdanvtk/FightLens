@@ -5,7 +5,8 @@ from typing import Any
 
 import cv2
 
-from fightlens.config import PROJECT_ROOT
+from fightlens.atomic import atomic_write
+from fightlens.config import PROJECT_ROOT, is_positive_number
 
 
 # Digits in window folder names, e.g. "window_000042" (keeps them sorted).
@@ -32,16 +33,10 @@ def resolve_effective_fps(
     video_fps: float,
     fps_override: float | None,
 ) -> tuple[float, str]:
-    """
-    Choose the FPS for the pipeline.
-
-    A manual override wins; otherwise the video metadata FPS is used.
-    Errors clearly if neither is valid instead of continuing with FPS 0.
-    Returns (fps, source) where source is "config" or "video".
-    """
+    """Pick the FPS: fps_override wins, else the video's own metadata. Returns (fps, source)."""
 
     if fps_override is not None:
-        if not _is_positive_number(fps_override):
+        if not is_positive_number(fps_override):
             raise ValueError(
                 f"fps_override must be a positive number, got: {fps_override!r}."
             )
@@ -68,13 +63,7 @@ def build_windows(
     window_size: int,
     start_frame: int = 0,
 ) -> list[dict[str, Any]]:
-    """
-    Split a frame range into contiguous frame-range windows (no physical cut).
-
-    window 0 -> [start_frame, start_frame + window_size), and so on up to
-    total_frames (exclusive). The final window may be shorter; it is kept
-    as the last partial window.
-    """
+    """Split [start_frame, total_frames) into windows of window_size frames. Last one may be shorter."""
 
     windows: list[dict[str, Any]] = []
     window_id = 0
@@ -103,12 +92,7 @@ def select_frame_indices(
     available_frames: int,
     count: int,
 ) -> list[int]:
-    """
-    Pick evenly spaced frame indices inside a window.
-
-    The first and last picks sit near the window boundaries. If fewer
-    frames exist than requested, all are used; frames are never duplicated.
-    """
+    """Pick `count` evenly spaced, non-duplicate frame indices inside the window."""
 
     if available_frames <= 0 or count <= 0:
         return []
@@ -136,15 +120,10 @@ def extract_windows(
     """
     Split a video into time windows and save sampled frames per window.
 
-    Layout: <output_dir>/<video_stem>/{manifest.json, windows/window_000000/...}
-    If the video output folder already exists: overwrite=True deletes it
-    first, overwrite=False stops with an error.
-
-    The processed scope can be limited so only part of a long video is
-    extracted: start_seconds / end_seconds bound the time range (end_seconds
-    None = end of video) and max_windows caps how many windows are kept.
-    Timestamps always stay relative to the original video, not the scope.
-    Returns (manifest, manifest_path).
+    Layout: <output_dir>/<video_stem>/{manifest.json, windows/window_000000/...}.
+    overwrite=True replaces an existing output folder, False errors instead.
+    start_seconds/end_seconds/max_windows limit the extracted scope; saved
+    timestamps stay relative to the original video. Returns (manifest, manifest_path).
     """
 
     video_path = Path(video_path)
@@ -229,12 +208,7 @@ def _resolve_scope(
     start_seconds: float,
     end_seconds: float | None,
 ) -> tuple[int, int]:
-    """
-    Convert the requested time range into a [first_frame, end_frame) range.
-
-    end_seconds None means "until the end of the video". Errors clearly if
-    the range falls outside the video instead of producing zero windows.
-    """
+    """Convert [start_seconds, end_seconds) into a [first_frame, end_frame) range (None end = video end)."""
 
     first_frame = int(round(start_seconds * effective_fps))
     if first_frame >= total_frames:
@@ -264,15 +238,7 @@ def _read_and_save_frames(
     window_by_id: dict[int, dict[str, Any]],
     effective_fps: float,
 ) -> None:
-    """
-    Read the video once, in order, and save every planned frame.
-
-    Reading sequentially (no seeking) keeps timestamps aligned even for
-    codecs with imprecise seeking. Unwanted frames are only grabbed, never
-    decoded, so skipping ahead to a late start_seconds stays cheap.
-    Window folders are created lazily, so a window that yields no frame
-    leaves no empty folder behind.
-    """
+    """Read the video once, sequentially (no seeking), and save every frame in `targets`."""
 
     if not targets:
         return
@@ -380,12 +346,30 @@ def _build_manifest(
 
 
 def write_manifest(manifest: dict[str, Any], manifest_path: str | Path) -> None:
-    """Write the manifest as pretty-printed JSON."""
+    """Write the manifest as pretty-printed JSON, atomically."""
+
+    atomic_write(
+        manifest_path,
+        lambda file: json.dump(manifest, file, indent=2, ensure_ascii=False),
+    )
+
+
+def register_artifact(
+    manifest_path: str | Path, name: str, artifact: dict[str, Any]
+) -> None:
+    """Set manifest["artifacts"][name] = artifact, leaving other fields untouched.
+
+    The manifest is the single index of a video's artifacts (descriptions.json,
+    embeddings.npz stay pure and never reference each other). Call this only
+    after the artifact's data file is fully written.
+    """
 
     manifest_path = Path(manifest_path)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    with manifest_path.open("w", encoding="utf-8") as file:
-        json.dump(manifest, file, indent=2, ensure_ascii=False)
+    with manifest_path.open("r", encoding="utf-8") as file:
+        manifest = json.load(file)
+
+    manifest.setdefault("artifacts", {})[name] = artifact
+    write_manifest(manifest, manifest_path)
 
 
 def _relative_path(path: str | Path) -> str:
@@ -396,13 +380,3 @@ def _relative_path(path: str | Path) -> str:
         return str(resolved.relative_to(PROJECT_ROOT))
     except ValueError:
         return str(resolved)
-
-
-def _is_positive_number(value: Any) -> bool:
-    """True for a strictly positive int or float (but not bool)."""
-
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and value > 0
-    )

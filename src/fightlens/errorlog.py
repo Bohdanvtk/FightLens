@@ -42,18 +42,7 @@ class ErrorLog:
     def record(
         self, where: str, error: BaseException, **context: Any
     ) -> dict[str, Any]:
-        """Store one error and immediately flush the JSON file.
-
-        Args:
-            where: What was being done when the error happened,
-                e.g. "window_000004" or "run".
-            error: The caught exception.
-            **context: Extra fields saved with the entry, e.g.
-                attempt=2, elapsed_seconds=30.1, timed_out=True.
-
-        Returns:
-            The entry that was stored.
-        """
+        """Store one error (where=e.g. "window_000004", plus any **context) and flush to disk."""
 
         entry: dict[str, Any] = {
             "time": datetime.now().isoformat(timespec="seconds"),

@@ -15,6 +15,7 @@ dependencies = [
     "opencv-python",
     "python-dotenv",
     "pyyaml",
+    "sentence-transformers",
 ]
 
 [project.optional-dependencies]
