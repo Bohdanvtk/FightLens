@@ -353,3 +353,33 @@ def validate_rerank_config(rerank_config: Any) -> dict[str, Any]:
         )
 
     return {"enabled": enabled, "top_n": top_n}
+
+
+_PREVIEW_PLAYERS = ("gif", "mp4")
+
+
+def validate_preview_config(preview_config: Any) -> dict[str, Any]:
+    """Validate the 'preview' config section (used only by scripts/app.py, not the CLI)."""
+
+    if not isinstance(preview_config, dict):
+        raise ValueError(
+            "The configuration must contain a 'preview' section "
+            "(a YAML mapping)."
+        )
+
+    fps = preview_config.get("fps", 6.0)
+    if fps != "auto" and not is_positive_number(fps):
+        raise ValueError(
+            "preview.fps must be a positive number or 'auto' (frames per "
+            f"second for the window preview clip), got: {fps!r}."
+        )
+
+    player = preview_config.get("player", "gif")
+    if player not in _PREVIEW_PLAYERS:
+        raise ValueError(
+            f"preview.player must be one of {_PREVIEW_PLAYERS} "
+            f"('gif' needs no system tools, 'mp4' needs ffmpeg on PATH), "
+            f"got: {player!r}."
+        )
+
+    return {"fps": "auto" if fps == "auto" else float(fps), "player": player}

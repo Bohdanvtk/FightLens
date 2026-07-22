@@ -130,3 +130,19 @@ rerank:
   # recall net). The user still sees search.top_k results AFTER
   # reranking, so this should be >= search.top_k.
   top_n: 5
+
+# Used only by the Streamlit GUI (scripts/app.py), not the CLI.
+preview:
+  # Frames per second used when the app assembles a window's sampled frame
+  # images (windows/window_XXXXXX/*.jpg) into a short preview clip.
+  # A positive number sets a fixed rate; "auto" picks the rate per window from
+  # its frame count (targeting a ~2.5s clip) so every preview plays over about
+  # the same short, comfortable duration.
+  fps: 6.0
+
+  # How the preview clip is rendered:
+  # "gif" -> pure Python (Pillow), no system tools needed, works on every
+  #          machine Streamlit itself runs on. Default, for portability.
+  # "mp4" -> H.264 via the system `ffmpeg` binary (must be on PATH), smoother
+  #          playback. Falls back to "gif" automatically if ffmpeg is missing.
+  player: "gif"

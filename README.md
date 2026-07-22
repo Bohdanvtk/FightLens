@@ -36,7 +36,7 @@ Fight video
 - [x] Text embedding generation
 - [x] Semantic search (embeddings.npz doubles as the index — no separate index step)
 - [x] LLM reranking (optional second stage over the top-N candidates)
-- [ ] Final video search interface
+- [x] Search GUI — Streamlit front end (pipeline + search + config)
 
 ## Gemini integration
 
@@ -153,6 +153,31 @@ Notes:
 - It **degrades gracefully**: on any failure — a garbage/empty answer, a timeout, an API error — it falls back to the plain embedding order instead of crashing, and it never loses or duplicates a candidate.
 - Gemini is called **only when enabled**; with `enabled: false` this stage is skipped entirely.
 
+## Search GUI (Streamlit)
+
+A minimal Streamlit front end for the search step:
+
+```bash
+streamlit run scripts/app.py
+```
+
+It's a thin UI layer — it calls the exact same `Retriever` / `Embedder` / `rerank` building blocks as `python -m fightlens search`, nothing reimplemented. A **Config** tab lets you override `video` / `embedding` / `search` / `rerank` / `preview` values for the current session only (nothing is written back to `configs/default.yaml`).
+
+Each result card plays a short preview clip assembled from that window's sampled frame images (`data/processed/<video>/windows/window_XXXXXX/*.jpg`), instead of a single static thumbnail.
+
+**Portability (incl. Windows):** the default `gif` player is pure Python (Pillow) and works on every machine that runs Streamlit — nothing extra to install. The optional `mp4` player shells out to the **system `ffmpeg` binary** (not a Python package, so `pip install` alone does not provide it); if `ffmpeg` isn't on `PATH` it automatically falls back to `gif`, so the app never breaks. To enable the `mp4` player:
+
+```bash
+sudo apt install ffmpeg          # Debian/Ubuntu
+brew install ffmpeg              # macOS
+winget install Gyan.FFmpeg       # Windows (then restart the terminal)
+```
+
+Configured under `preview:` in the YAML (GUI-only, the CLI never reads it):
+
+- `fps` — playback speed of the generated preview clip, in frames per second (default `6.0`), or `"auto"` to set it per window from that window's frame count (targeting a ~2.5s clip) so every preview plays over about the same short, comfortable duration. Editable live from the Config tab.
+- `player` — `"gif"` (default, pure Python via Pillow, needs no system tools) or `"mp4"` (H.264 via the system `ffmpeg`, smoother but requires it on PATH — falls back to `"gif"` automatically if missing).
+
 ## Per-video manifest as the artifact index
 
 Each video's `manifest.json` is the single index of that video's artifacts. The data files stay pure and never point at each other; instead every step registers what it produced under an `"artifacts"` section (written atomically, only after the data file is fully saved):
@@ -180,7 +205,7 @@ Configure the input video, window duration, images per window, and the descripti
 configs/default.yaml
 ```
 
-Then run the two pipeline steps separately:
+Then run the pipeline steps separately:
 
 ```bash
 # 1. Extract window frames (no API calls, spends no tokens).
@@ -197,6 +222,9 @@ python -m fightlens search "clinch near the ropes"
 
 # Or run extract + describe + embed in one go:
 python -m fightlens full
+
+# Or launch the Streamlit GUI (run the pipeline + search in the browser).
+streamlit run scripts/app.py
 ```
 
 `python -m fightlens` without a command still runs extraction only. Steps 2 and 3 are separate on purpose: `describe` spends Gemini tokens, while `embed` and `search` are purely local. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`); the embedding model and device live in `embedding:` (`model_name`, `batch_size`, `device`, `normalize`); how many search results to print lives in `search:` (`top_k`). Optional LLM reranking of the search results lives in `rerank:` (`enabled`, `top_n`) and is off by default — see *LLM reranking (optional)* above.

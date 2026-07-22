@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from fightlens.config import validate_embedding_config
+from fightlens.config import validate_embedding_config, validate_preview_config
 from fightlens.describe import window_name
 from fightlens.embed import embed_windows
 from fightlens.embeddings import EMBEDDING_DIM, Embedder, load_store
@@ -334,3 +334,41 @@ def test_validate_embedding_config_rejects_bad_values(mutate, match):
 def test_validate_embedding_config_requires_mapping():
     with pytest.raises(ValueError, match="embedding"):
         validate_embedding_config(None)
+
+
+def test_validate_preview_config_accepts_valid_config():
+    params = validate_preview_config({"fps": 3.0, "player": "mp4"})
+    assert params == {"fps": 3.0, "player": "mp4"}
+
+
+def test_validate_preview_config_applies_defaults():
+    params = validate_preview_config({})
+    assert params == {"fps": 6.0, "player": "gif"}
+
+
+def test_validate_preview_config_accepts_auto_fps():
+    params = validate_preview_config({"fps": "auto"})
+    assert params == {"fps": "auto", "player": "gif"}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [0, -1, "2", True, None],
+)
+def test_validate_preview_config_rejects_bad_fps(value):
+    with pytest.raises(ValueError, match="fps"):
+        validate_preview_config({"fps": value})
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["avi", "", 1, True, None],
+)
+def test_validate_preview_config_rejects_bad_player(value):
+    with pytest.raises(ValueError, match="player"):
+        validate_preview_config({"player": value})
+
+
+def test_validate_preview_config_requires_mapping():
+    with pytest.raises(ValueError, match="preview"):
+        validate_preview_config(None)

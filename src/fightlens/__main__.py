@@ -68,11 +68,11 @@ def main() -> None:
     try:
         # Running without a command keeps the old behaviour: extraction only.
         if args.command in (None, "extract", "full"):
-            _run_extract(config)
+            run_extract(config)
         if args.command in ("describe", "full"):
-            _run_describe(config, error_log)
+            run_describe(config, error_log)
         if args.command in ("embed", "full"):
-            _run_embed(config)
+            run_embed(config)
         if args.command == "search":
             _run_search(config, args.query)
     except Exception as error:
@@ -87,8 +87,8 @@ def main() -> None:
             )
 
 
-def _run_extract(config: dict[str, Any]) -> None:
-    """Split the video into time windows and save sampled frames."""
+def run_extract(config: dict[str, Any]) -> None:
+    """Split the video into time windows and save sampled frames; also called by scripts/app.py."""
 
     # Read and validate the video section (clear errors on bad values).
     params = validate_video_config(config.get("video"))
@@ -112,8 +112,8 @@ def _run_extract(config: dict[str, Any]) -> None:
     _print_extract_summary(manifest, manifest_path)
 
 
-def _run_describe(config: dict[str, Any], error_log: ErrorLog) -> None:
-    """Generate a Gemini description for every extracted window."""
+def run_describe(config: dict[str, Any], error_log: ErrorLog) -> None:
+    """Generate a Gemini description for every extracted window; also called by scripts/app.py."""
 
     params = validate_descriptions_config(config.get("descriptions"))
 
@@ -136,8 +136,8 @@ def _run_describe(config: dict[str, Any], error_log: ErrorLog) -> None:
     _print_describe_summary(summary)
 
 
-def _run_embed(config: dict[str, Any]) -> None:
-    """Embed the window descriptions into a local vector store (no API calls)."""
+def run_embed(config: dict[str, Any]) -> None:
+    """Embed window descriptions into a local vector store (no API calls); also called by scripts/app.py."""
 
     params = validate_embedding_config(config.get("embedding"))
 
@@ -171,7 +171,7 @@ def _run_search(config: dict[str, Any], query: str) -> None:
     embedding_params = validate_embedding_config(config.get("embedding"))
 
     # Same per-video processed folder, and the same Embedder construction,
-    # as _run_embed — the query must land in the same vector space as the
+    # as run_embed — the query must land in the same vector space as the
     # stored window vectors.
     processed_dir = video_processed_dir(config)
 

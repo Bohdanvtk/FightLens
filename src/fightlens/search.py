@@ -105,7 +105,7 @@ class Retriever:
         return results
 
 
-def _format_timecode(seconds: float) -> str:
+def format_timecode(seconds: float) -> str:
     """Format seconds as MM:SS.s, e.g. 9.6 -> "00:09.6", 74.6 -> "01:14.6"."""
 
     minutes = int(seconds // 60)
@@ -132,8 +132,8 @@ def format_results(
     for rank, result in enumerate(results, start=1):
         if result.start_sec is not None and result.end_sec is not None:
             timecode = (
-                f"{_format_timecode(result.start_sec)}"
-                f"–{_format_timecode(result.end_sec)}"
+                f"{format_timecode(result.start_sec)}"
+                f"–{format_timecode(result.end_sec)}"
             )
         else:
             timecode = "--:--.-–--:--.-"

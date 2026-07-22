@@ -13,9 +13,11 @@ dependencies = [
     "google-genai",
     "numpy",
     "opencv-python",
+    "pillow",
     "python-dotenv",
     "pyyaml",
     "sentence-transformers",
+    "streamlit",
 ]
 
 [project.optional-dependencies]
