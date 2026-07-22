@@ -1,12 +1,15 @@
 import argparse
+import time
 from typing import Any
 
+from fightlens import gemini
 from fightlens.config import (
     load_config,
     resolve_project_path,
     validate_descriptions_config,
     validate_embedding_config,
     validate_error_log_dir,
+    validate_rerank_config,
     validate_search_config,
     validate_video_config,
     video_processed_dir,
@@ -15,6 +18,7 @@ from fightlens.describe import describe_windows
 from fightlens.embed import embed_windows
 from fightlens.embeddings import Embedder
 from fightlens.errorlog import ErrorLog
+from fightlens.rerank import rerank
 from fightlens.search import Retriever, format_results
 from fightlens.video import extract_windows
 
@@ -41,7 +45,7 @@ def main() -> None:
     )
     subparsers.add_parser(
         "full",
-        help="Run extract, then describe.",
+        help="Run extract, then describe, then embed.",
     )
     search_parser = subparsers.add_parser(
         "search",
@@ -67,7 +71,7 @@ def main() -> None:
             _run_extract(config)
         if args.command in ("describe", "full"):
             _run_describe(config, error_log)
-        if args.command == "embed":
+        if args.command in ("embed", "full"):
             _run_embed(config)
         if args.command == "search":
             _run_search(config, args.query)
@@ -160,9 +164,10 @@ def _run_embed(config: dict[str, Any]) -> None:
 
 
 def _run_search(config: dict[str, Any], query: str) -> None:
-    """Rank a video's embedded windows against `query` and print the top matches (no API calls)."""
+    """Rank a video's embedded windows against `query`, optionally reranked by Gemini, and print the top matches."""
 
     search_params = validate_search_config(config.get("search"))
+    rerank_params = validate_rerank_config(config.get("rerank"))
     embedding_params = validate_embedding_config(config.get("embedding"))
 
     # Same per-video processed folder, and the same Embedder construction,
@@ -182,8 +187,24 @@ def _run_search(config: dict[str, Any], query: str) -> None:
         descriptions_path=processed_dir / "descriptions.json",
         embedder=embedder,
     )
-    results = retriever.search(query, search_params["top_k"])
-    format_results(query, results, total=len(retriever))
+
+    # Rerank disabled (default): behaves exactly like Step 5, zero Gemini
+    # calls. Rerank enabled: retrieve the wider top_n candidate net, let
+    # Gemini reorder those, then trim to top_k for display.
+    effective_k = (
+        rerank_params["top_n"] if rerank_params["enabled"] else search_params["top_k"]
+    )
+    results = retriever.search(query, effective_k)
+
+    if rerank_params["enabled"]:
+        start = time.perf_counter()
+        results = rerank(query, results, gemini.generate_text, model=gemini.GEMINI_MODEL)
+        results = results[: search_params["top_k"]]
+        print(f"Reranking applied ({time.perf_counter() - start:.1f}s)")
+
+    format_results(
+        query, results, total=len(retriever), reranked=rerank_params["enabled"]
+    )
 
 
 def _print_extract_summary(manifest: dict[str, Any], manifest_path: Any) -> None:

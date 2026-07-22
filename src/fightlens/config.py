@@ -324,3 +324,32 @@ def validate_search_config(search_config: Any) -> dict[str, Any]:
         )
 
     return {"top_k": top_k}
+
+
+def validate_rerank_config(rerank_config: Any) -> dict[str, Any]:
+    """Validate the 'rerank' config section (the model is reused from Gemini's description model, not a key)."""
+
+    if not isinstance(rerank_config, dict):
+        raise ValueError(
+            "The configuration must contain a 'rerank' section "
+            "(a YAML mapping)."
+        )
+
+    enabled = rerank_config.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(
+            f"rerank.enabled must be true or false, got: {enabled!r}."
+        )
+
+    top_n = rerank_config.get("top_n", 10)
+    if (
+        isinstance(top_n, bool)
+        or not isinstance(top_n, int)
+        or top_n <= 0
+    ):
+        raise ValueError(
+            "rerank.top_n must be a positive integer "
+            f"(embedding candidates sent to the reranker), got: {top_n!r}."
+        )
+
+    return {"enabled": enabled, "top_n": top_n}

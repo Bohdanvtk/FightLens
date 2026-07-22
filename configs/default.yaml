@@ -113,3 +113,20 @@ search:
   # How many top matches to print for a query
   # (python -m fightlens search "clinch near the ropes").
   top_k: 10
+
+rerank:
+  # Optional second stage after embeddings: send the top_n embedding
+  # candidates to Gemini in ONE request and have it reorder them by how
+  # well each window's description actually matches the query (landed vs
+  # blocked/slipped, attacker vs defender, exact punch type) — nuances
+  # plain embeddings miss. Reuses the same Gemini model as the
+  # description step (the GEMINI_MODEL env var); no separate model key.
+  #
+  # false -> `search` behaves exactly as in Step 5 (pure embeddings,
+  # zero Gemini calls). true -> makes one Gemini text request per search.
+  enabled: true
+
+  # How many embedding candidates to send to the reranker (the wider
+  # recall net). The user still sees search.top_k results AFTER
+  # reranking, so this should be >= search.top_k.
+  top_n: 5

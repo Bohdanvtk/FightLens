@@ -35,7 +35,7 @@ Fight video
 - [x] Automatic Gemini frame descriptions
 - [x] Text embedding generation
 - [x] Semantic search (embeddings.npz doubles as the index — no separate index step)
-- [ ] LLM reranking
+- [x] LLM reranking (optional second stage over the top-N candidates)
 - [ ] Final video search interface
 
 ## Gemini integration
@@ -132,6 +132,27 @@ Notes:
 - The query must be in **English** — descriptions are generated in English and the default `all-MiniLM-L6-v2` model is English-centric.
 - This step makes no Gemini or other API calls and writes nothing to disk (no artifact, no manifest changes).
 
+## LLM reranking (optional)
+
+Embeddings match on surface meaning and can miss the nuance of a fight moment — *landed* vs *blocked/slipped*, attacker vs defender, the exact punch type. An optional second stage over the search results fixes this: after embeddings narrow the video to the top `top_n` candidates, Gemini reorders **just those** by how well each window's description actually answers the query, in **one** text request. This is retrieve-then-rerank — cheap embeddings recall a wider net, then the LLM re-ranks only the shortlist.
+
+It is **off by default** and configured under `rerank:` in the YAML:
+
+- `enabled` — `false` (default) makes `search` behave exactly as the pure-embeddings step above: **zero Gemini calls**, identical output. `true` sends one Gemini request per search.
+- `top_n` — how many embedding candidates to send to the reranker (default `10`, the wider recall net). Should be `>= search.top_k`, since you still see `top_k` results **after** reordering.
+
+```bash
+# Enable it by setting `rerank.enabled: true` in configs/default.yaml, then:
+python -m fightlens search "left hook that slips past the guard"
+```
+
+Notes:
+
+- The reranker reuses the **same Gemini model** as the description step (the `GEMINI_MODEL` env var) — no separate model key or credentials.
+- It retrieves `top_n` from embeddings, reranks them, then trims to `search.top_k` for display (the header line shows `(reranked)`).
+- It **degrades gracefully**: on any failure — a garbage/empty answer, a timeout, an API error — it falls back to the plain embedding order instead of crashing, and it never loses or duplicates a candidate.
+- Gemini is called **only when enabled**; with `enabled: false` this stage is skipped entirely.
+
 ## Per-video manifest as the artifact index
 
 Each video's `manifest.json` is the single index of that video's artifacts. The data files stay pure and never point at each other; instead every step registers what it produced under an `"artifacts"` section (written atomically, only after the data file is fully saved):
@@ -174,8 +195,8 @@ python -m fightlens embed
 # 4. Search the embedded windows with a natural-language query (no API calls).
 python -m fightlens search "clinch near the ropes"
 
-# Or run extract + describe in one go:
+# Or run extract + describe + embed in one go:
 python -m fightlens full
 ```
 
-`python -m fightlens` without a command still runs extraction only. Steps 2 and 3 are separate on purpose: `describe` spends Gemini tokens, while `embed` and `search` are purely local. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`); the embedding model and device live in `embedding:` (`model_name`, `batch_size`, `device`, `normalize`); how many search results to print lives in `search:` (`top_k`).
+`python -m fightlens` without a command still runs extraction only. Steps 2 and 3 are separate on purpose: `describe` spends Gemini tokens, while `embed` and `search` are purely local. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`); the embedding model and device live in `embedding:` (`model_name`, `batch_size`, `device`, `normalize`); how many search results to print lives in `search:` (`top_k`). Optional LLM reranking of the search results lives in `rerank:` (`enabled`, `top_n`) and is off by default — see *LLM reranking (optional)* above.

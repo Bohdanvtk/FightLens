@@ -81,6 +81,26 @@ def get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+def _send(content: list[dict], model: str, timeout_seconds: float | None) -> str:
+    """Send prebuilt content (images and/or text) to Gemini in ONE request; returns the plain-text answer.
+
+    Shared by every Gemini caller (multimodal or text-only) so client
+    construction, model resolution and the timeout watchdog live in one
+    place. null/None timeout_seconds = wait forever.
+    """
+
+    def _request() -> str:
+        interaction = get_client().interactions.create(
+            model=model,
+            input=content,
+        )
+        return interaction.output_text
+
+    if timeout_seconds is None:
+        return _request()
+    return _call_with_timeout(_request, timeout_seconds)
+
+
 def describe_images(
     image_paths: Sequence[str | Path],
     prompt: str,
@@ -118,13 +138,24 @@ def describe_images(
 
     content.append({"type": "text", "text": prompt})
 
-    def _request() -> str:
-        interaction = get_client().interactions.create(
-            model=GEMINI_MODEL,
-            input=content,
-        )
-        return interaction.output_text
+    return _send(content, GEMINI_MODEL, timeout_seconds)
 
-    if timeout_seconds is None:
-        return _request()
-    return _call_with_timeout(_request, timeout_seconds)
+
+def generate_text(
+    prompt: str,
+    model: str = GEMINI_MODEL,
+    timeout_seconds: float | None = 30.0,
+) -> str:
+    """
+    Send a plain text-only prompt to Gemini in ONE request; returns the plain-text answer.
+
+    Text-only counterpart to describe_images (no images attached), reusing
+    the same client, model resolution and timeout watchdog. Used by the
+    optional Step 6 reranker; knows nothing about reranking itself.
+    """
+
+    if not prompt or not prompt.strip():
+        raise ValueError("generate_text needs a non-empty prompt.")
+
+    content = [{"type": "text", "text": prompt}]
+    return _send(content, model, timeout_seconds)

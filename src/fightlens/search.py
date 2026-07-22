@@ -112,11 +112,17 @@ def _format_timecode(seconds: float) -> str:
     return f"{minutes:02d}:{seconds - minutes * 60:04.1f}"
 
 
-def format_results(query: str, results: list[SearchResult], total: int) -> None:
+def format_results(
+    query: str,
+    results: list[SearchResult],
+    total: int,
+    reranked: bool = False,
+) -> None:
     """Print the ranked results; the only function in this module that prints."""
 
     print(f'Query: "{query}"')
-    print(f"Top {len(results)} of {total} windows")
+    suffix = " (reranked)" if reranked else ""
+    print(f"Top {len(results)} of {total} windows{suffix}")
     print()
 
     if not results:
