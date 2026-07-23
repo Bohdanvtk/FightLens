@@ -1,230 +1,212 @@
 # FightLens
 
-FightLens is a text-to-video semantic search system for combat sports footage.
+**Search fight footage by describing what you want to see.**
 
-The goal of the project is to let a user describe a fight moment in natural language, such as:
+Type *"a counterpunch thrown right after a block"* → get the exact seconds where it happens, ranked, with playable clips.
 
-> "fighter lands a right hand"  
-> "clinch near the ropes"  
-> "body attack"
+![FightLens search](docs/images/fight_lens_app.png)
 
-and retrieve the most relevant video clips from a recorded fight.
+---
 
-## Planned pipeline
+## The idea
 
-```text
-Fight video
-→ short clips
-→ sampled frames
-→ Gemini-generated descriptions
-→ text embeddings
-→ semantic retrieval
-→ LLM reranking
-→ ranked video results
+Searching video is hard. Searching text is solved. So FightLens turns video into text **once**, then never touches the video again.
+
+```
+video → 4s windows → 24 frames each → Gemini describes each window
+                                              ↓
+        ranked clips ← LLM rerank ← vector search ← embeddings
 ```
 
-## Current progress
+A punch lasts 0.2–0.5s, so sparse sampling misses punches entirely. Windows stay short, frames stay **dense inside** them — the model sees motion, not a still.
 
-- [x] Initial project structure
-- [x] Gemini API integration
-- [x] YAML-based configuration
-- [x] Video loading with OpenCV
-- [x] Time-window splitting with evenly sampled frames
-- [x] Per-window folders and a processing manifest
-- [x] Frame visualization with source-frame labels
-- [x] Automatic Gemini frame descriptions
-- [x] Text embedding generation
-- [x] Semantic search (embeddings.npz doubles as the index — no separate index step)
-- [x] LLM reranking (optional second stage over the top-N candidates)
-- [x] Search GUI — Streamlit front end (pipeline + search + config)
+---
 
-## Gemini integration
+## Results
 
-FightLens is connected to the Gemini API through the `google-genai` SDK.
+Round 1, Usyk vs Fury — 37 windows, 8 queries. **Precision@10** = how many of 10 returned windows actually match.
 
-The API key and model name are loaded from environment variables, keeping sensitive credentials outside the source code.
+| Query type | Example | P@10 |
+|---|---|---|
+| Lexical | `jab`, `backed up against the ropes` | **10/10** |
+| Defensive action | `a punch slipped by ducking underneath` | 7–8/10 |
+| Negation | `nothing significant, only footwork` | 6/10 |
+| Temporal | `a counterpunch right after a block` | 3/10 |
 
-Gemini generates a description per extracted time window (see below). Frame extraction and description generation are two **separate** commands, so preprocessing never consumes API tokens.
+- **Accuracy tracks query structure.** Word matches are near-perfect; event ordering collapses — one vector per description loses sequence. Negation fails similarly: *"no punches thrown"* still contains *punches*.
+- **Hubness:** 31/37 windows surfaced at least once; one appeared in 6 of 8 queries. Detail-rich descriptions sit moderately close to everything.
+- **Limitation, stated honestly:** the rerank test ran with `top_n = top_k = 10`, so the reranker could only permute the same set — P@10 couldn't change by construction. Re-labelling gave 7/10 vs 8/10, so sub-1-window deltas are noise.
 
-## Time-window frame extraction
+---
 
-The preprocessing module splits a source video into short **time windows** and keeps a few representative frames from each one. One window will later map to a single multimodal request to Gemini.
+## What it costs
 
-Two parameters control this:
+**Pay once to turn video into text. Searching it is free forever.**
 
-- `n_sec_per_window` — how many seconds of video one window spans. With 30 FPS and `n_sec_per_window: 2`, a full window covers ~60 source frames (window 0 ≈ frames 0–59, window 1 ≈ 60–119, ...).
-- `n_img_per_window` — how many frames to keep from each window. They are sampled **evenly** across the whole window (not the first N in a row), with the first and last picks near the window boundaries.
+| Step | Requests |
+|---|---|
+| Extract frames | **0** — local |
+| Describe windows | **1 per window**, once per video |
+| Embed | **0** — local model |
+| Search | **0** |
+| Rerank *(optional, off)* | 1 per search |
 
-FPS is read automatically from the video metadata. An optional `fps_override` acts as a fallback for videos with missing or broken metadata. The final, shorter-than-full slice of the video is **not** discarded — it becomes the last (partial) window.
+One round = **37 requests, once**. Fits the free tier.
 
-The processed scope can be limited so only part of a long fight is extracted (and later described, keeping token costs under control):
+- **Extract and describe are separate commands** — re-tune windows, re-extract, inspect frames without spending a token.
+- **One multimodal request per window** with all 24 frames — not one per frame, not a frame→description chain that compounds errors.
+- **Idempotent + content-addressed** — interrupted runs resume; editing the prompt re-embeds only changed windows.
+- **Embeddings run locally** — no per-query cost, works offline, no key.
+- **`start_seconds` / `end_seconds` / `max_windows`** cap the bill before the run starts.
 
-- `start_seconds` / `end_seconds` — bound the extracted time range (`end_seconds: null` = until the end of the video). Timestamps stay relative to the original video.
-- `max_windows` — cap on how many windows are kept (`null` = no limit).
+---
 
-### Output layout
+## Not just boxing
 
-```text
-data/processed/<video_name>/
-    manifest.json
-    windows/
-        window_000000/
-            img_00_frame_00000000_0000000.00s.jpg
-            img_01_frame_00000012_0000000.40s.jpg
-            ...
-        window_000001/
-            ...
-```
+The sport lives in one YAML value: `descriptions.prompt`. Nothing in the code knows what a jab is. Swap the prompt and the same pipeline searches training footage, security cameras, lectures or gameplay.
 
-Each image name encodes its local position in the window, its source frame index, and its timestamp. The `manifest.json` records per-window metadata (frame ranges, timestamps, saved images, whether the window is full or partial) plus global video info, and is used later to tie Gemini descriptions and embeddings back to a specific moment.
+---
 
-All parameters are configured through YAML.
+## Pipeline
 
-## Gemini window descriptions
+Five stages, five commands. Each reads the previous file and writes its own — so any stage re-runs alone.
 
-A separate step sends each extracted window to Gemini: all of the window's frames go into **one** multimodal request, in chronological order, together with a boxing-analyst prompt. Gemini reads them as a short motion sequence and answers with 2–4 sentences describing the action (who attacks, punch type, target, result, defense, ring position).
+| # | Command | Does | Cost | Writes |
+|---|---|---|---|---|
+| 1 | `extract` | Splits video into windows, samples frames evenly across each | free | `windows/`, `manifest.json` |
+| 2 | `describe` | All frames of a window → **one** Gemini request → 2–4 sentences | 1 req/window | `descriptions.json` |
+| 3 | `embed` | Each description → 384-d normalized vector | free | `embeddings.npz` |
+| 4 | `search` | Query → same encoder → dot product → top-k | free | — |
+| 5 | *rerank* | Gemini reorders the shortlist in one request | 1 req/search | — |
 
-The results accumulate in `descriptions.json` **inside the video's own processed folder** (`data/processed/<video>/descriptions.json`, next to `manifest.json`), so every video's artifacts stay self-contained. One entry per window:
+Details worth knowing:
 
-```json
-{
-  "window_id": "window_000000",
-  "start_sec": 0.0,
-  "end_sec": 2.0,
-  "frames": ["data/processed/test_video/windows/window_000000/img_00_....jpg"],
-  "description": "The fighter in red shorts ..."
-}
-```
+- Frame names encode origin — `img_03_frame_00000021_0000000.70s.jpg` = 4th kept frame, source frame 21, at 0.70s.
+- Stage 2 is **resumable**: done windows are skipped, so an interrupted run restarts with the same command. Hung calls time out, get logged, and retry.
+- Stage 3 keys each vector by a hash of its description; changing the model invalidates all of them.
+- Stage 4 has **no index-building step** — `embeddings.npz` *is* the index.
+- Stage 5 **degrades gracefully**: bad answer, timeout or API error → falls back to embedding order, never drops a candidate.
 
-The step is idempotent: windows already present in the JSON are skipped, and the file is saved after every window, so an interrupted run can simply be restarted. Requests run sequentially with a configurable pause between calls (`request_delay_seconds`, for free-tier rate limits), and a failed call is retried once.
+---
 
-## Local window embeddings
+## Run it
 
-A separate, **purely local** step turns each window's description into an embedding vector. It never calls Gemini or any paid API — it runs a [sentence-transformers](https://www.sbert.net/) model on this machine (the first run downloads and caches the model, ~80MB, from Hugging Face).
-
-For every video it reads `data/processed/<video>/descriptions.json`, encodes each window's description into a 384-dimensional, L2-normalized vector (normalizing here makes later similarity a plain dot product), and stores all vectors together in a single `data/processed/<video>/embeddings.npz` alongside their `window_ids`. Storing normalized vectors keeps the whole video's index in one small file that the search step can load directly.
-
-The step is idempotent and content-addressed: each vector is keyed by a hash of its exact description text, so re-running only re-embeds windows whose description changed (or everything, if the configured model changed — vectors from different models are not comparable). Running it twice with no input changes embeds nothing the second time.
-
-It is configured under `embedding:` in the YAML:
-
-- `model_name` — the local sentence-transformers model (default `all-MiniLM-L6-v2`, 384-dim). The output dimension is fixed by the model, so it is not a config key.
-- `batch_size` — how many descriptions to encode per forward pass (default `32`).
-- `device` — `auto` (let the model pick cuda/cpu), or force `cpu` / `cuda`.
-- `normalize` — L2-normalize each vector (default `true`).
-
-## Semantic search
-
-The final, **purely local and read-only** step: search a video's windows with a natural-language query.
+**Needs:** Python 3.10+, ~2 GB disk (PyTorch), a free [Gemini key](https://aistudio.google.com/apikey). `ffmpeg` optional.
 
 ```bash
-python -m fightlens search "clinch near the ropes"
+git clone https://github.com/Bohdanvtk/FightLens.git && cd FightLens
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
+cp .env.example .env                                 # paste your key
 ```
 
-There is no separate index-building step — `embeddings.npz` (written by Step 4) already holds every window's normalized vector, so it's loaded and matrix-multiplied directly. The query string is encoded with the exact same local Embedder (same `embedding:` config) that produced the stored vectors, so both live in the same vector space; since the vectors are already L2-normalized, cosine similarity is just a dot product. Results are joined back to `descriptions.json` by `window_id` to print each match's timecode and description, ranked by similarity, highest first.
+`.env` is one line:
 
-It is configured under `search:` in the YAML:
+```
+GEMINI_API_KEY=AIza...
+```
 
-- `top_k` — how many top matches to print (default `10`).
-
-Notes:
-
-- The query must be in **English** — descriptions are generated in English and the default `all-MiniLM-L6-v2` model is English-centric.
-- This step makes no Gemini or other API calls and writes nothing to disk (no artifact, no manifest changes).
-
-## LLM reranking (optional)
-
-Embeddings match on surface meaning and can miss the nuance of a fight moment — *landed* vs *blocked/slipped*, attacker vs defender, the exact punch type. An optional second stage over the search results fixes this: after embeddings narrow the video to the top `top_n` candidates, Gemini reorders **just those** by how well each window's description actually answers the query, in **one** text request. This is retrieve-then-rerank — cheap embeddings recall a wider net, then the LLM re-ranks only the shortlist.
-
-It is **off by default** and configured under `rerank:` in the YAML:
-
-- `enabled` — `false` (default) makes `search` behave exactly as the pure-embeddings step above: **zero Gemini calls**, identical output. `true` sends one Gemini request per search.
-- `top_n` — how many embedding candidates to send to the reranker (default `10`, the wider recall net). Should be `>= search.top_k`, since you still see `top_k` results **after** reordering.
+Drop a video in `data/raw/`, point `configs/default.yaml` at it, then:
 
 ```bash
-# Enable it by setting `rerank.enabled: true` in configs/default.yaml, then:
-python -m fightlens search "left hook that slips past the guard"
-```
-
-Notes:
-
-- The reranker reuses the **same Gemini model** as the description step (the `GEMINI_MODEL` env var) — no separate model key or credentials.
-- It retrieves `top_n` from embeddings, reranks them, then trims to `search.top_k` for display (the header line shows `(reranked)`).
-- It **degrades gracefully**: on any failure — a garbage/empty answer, a timeout, an API error — it falls back to the plain embedding order instead of crashing, and it never loses or duplicates a candidate.
-- Gemini is called **only when enabled**; with `enabled: false` this stage is skipped entirely.
-
-## Search GUI (Streamlit)
-
-A minimal Streamlit front end for the search step:
-
-```bash
-streamlit run scripts/app.py
-```
-
-It's a thin UI layer — it calls the exact same `Retriever` / `Embedder` / `rerank` building blocks as `python -m fightlens search`, nothing reimplemented. A **Config** tab lets you override `video` / `embedding` / `search` / `rerank` / `preview` values for the current session only (nothing is written back to `configs/default.yaml`).
-
-Each result card plays a short preview clip assembled from that window's sampled frame images (`data/processed/<video>/windows/window_XXXXXX/*.jpg`), instead of a single static thumbnail.
-
-**Portability (incl. Windows):** the default `gif` player is pure Python (Pillow) and works on every machine that runs Streamlit — nothing extra to install. The optional `mp4` player shells out to the **system `ffmpeg` binary** (not a Python package, so `pip install` alone does not provide it); if `ffmpeg` isn't on `PATH` it automatically falls back to `gif`, so the app never breaks. To enable the `mp4` player:
-
-```bash
-sudo apt install ffmpeg          # Debian/Ubuntu
-brew install ffmpeg              # macOS
-winget install Gyan.FFmpeg       # Windows (then restart the terminal)
-```
-
-Configured under `preview:` in the YAML (GUI-only, the CLI never reads it):
-
-- `fps` — playback speed of the generated preview clip, in frames per second (default `6.0`), or `"auto"` to set it per window from that window's frame count (targeting a ~2.5s clip) so every preview plays over about the same short, comfortable duration. Editable live from the Config tab.
-- `player` — `"gif"` (default, pure Python via Pillow, needs no system tools) or `"mp4"` (H.264 via the system `ffmpeg`, smoother but requires it on PATH — falls back to `"gif"` automatically if missing).
-
-## Per-video manifest as the artifact index
-
-Each video's `manifest.json` is the single index of that video's artifacts. The data files stay pure and never point at each other; instead every step registers what it produced under an `"artifacts"` section (written atomically, only after the data file is fully saved):
-
-```json
-"artifacts": {
-  "descriptions": { "path": "descriptions.json", "model": "gemini-2.5-flash", "count": 13 },
-  "embeddings":   { "path": "embeddings.npz", "model": "all-MiniLM-L6-v2", "dim": 384, "count": 13 }
-}
-```
-
-## Frame sampling preview
-
-The frames of a single window can be displayed in a vertical sequence with source-frame and timestamp labels parsed from the file names (see `scripts/inspect_frames.py`, `VIDEO_NAME` / `WINDOW_ID`).
-
-![Extracted frames preview](docs/images/result.png)
-
-![Additional extracted frames preview](docs/images/result_2.png)
-
-## Running the project
-
-Configure the input video, window duration, images per window, and the descriptions step in:
-
-```text
-configs/default.yaml
-```
-
-Then run the pipeline steps separately:
-
-```bash
-# 1. Extract window frames (no API calls, spends no tokens).
-python -m fightlens extract
-
-# 2. Generate Gemini descriptions for the extracted windows.
-python -m fightlens describe
-
-# 3. Embed the window descriptions locally (no API calls, spends no tokens).
-python -m fightlens embed
-
-# 4. Search the embedded windows with a natural-language query (no API calls).
+python -m fightlens extract     # free
+python -m fightlens describe    # spends requests, resumable
+python -m fightlens embed       # free, first run downloads ~80 MB
 python -m fightlens search "clinch near the ropes"
 
-# Or run extract + describe + embed in one go:
-python -m fightlens full
-
-# Or launch the Streamlit GUI (run the pipeline + search in the browser).
-streamlit run scripts/app.py
+python -m fightlens full        # stages 1-3 in one go
+streamlit run scripts/app.py    # or do everything in the browser
 ```
 
-`python -m fightlens` without a command still runs extraction only. Steps 2 and 3 are separate on purpose: `describe` spends Gemini tokens, while `embed` and `search` are purely local. The description prompt and retry count live in the `descriptions:` section of the YAML (`prompt`, `retry_attempts`); the embedding model and device live in `embedding:` (`model_name`, `batch_size`, `device`, `normalize`); how many search results to print lives in `search:` (`top_k`). Optional LLM reranking of the search results lives in `rerank:` (`enabled`, `top_n`) and is off by default — see *LLM reranking (optional)* above.
+Queries must be **English**. The key is read only when Gemini is called — `extract`, `embed` and `search` run without one. Re-running any stage is always safe.
+
+| Problem | Fix |
+|---|---|
+| `GEMINI_API_KEY is missing` | key line in `.env` is empty |
+| `search` says run `embed` first | `embeddings.npz` doesn't exist yet |
+| Descriptions stopped halfway | re-run `describe`; `logs/` lists what failed |
+| Choppy previews | install `ffmpeg`, set `preview.player: mp4` |
+
+---
+
+## GUI
+
+A thin Streamlit layer over the same `Retriever` / `Embedder` / `rerank` objects the CLI uses — nothing reimplemented.
+
+![Results with preview clips](docs/images/fight_lens_app_2.png)
+
+Each card plays a **clip built from that window's frames**, so you judge by watching, not by trusting the description.
+
+![Config tab](docs/images/fight_lens_app_3.png)
+
+The **Config** tab overrides any YAML value for the session only — experiments never mutate the committed config.
+
+---
+
+## Configuration
+
+The two knobs that matter — your quality/cost dial:
+
+| Key | Controls |
+|---|---|
+| `video.n_sec_per_window` | Window length. Shorter = finer granularity, more windows, more requests. |
+| `video.n_img_per_window` | Frames kept per window, sampled evenly. More = better motion, higher cost per request. |
+
+Missing punches? Shorten the window or add frames. Too expensive? Do the opposite.
+
+| Section | Keys |
+|---|---|
+| `video` | `input_path`, `output_dir`, `n_sec_per_window`, `n_img_per_window`, `fps_override`, `start_seconds`, `end_seconds`, `max_windows`, `overwrite` |
+| `descriptions` | `prompt`, `request_delay_seconds`, `retry_attempts`, `response_timeout_seconds` |
+| `embedding` | `model_name`, `batch_size`, `device`, `normalize` |
+| `search` | `top_k` |
+| `rerank` | `enabled`, `top_n` |
+| `preview` | `fps`, `player` — GUI only |
+
+---
+
+## Engineering notes
+
+- **One embedder, two callers.** The same object encodes stored descriptions and incoming queries. Different models would put them in different spaces and return noise — silently. Sharing it makes that impossible.
+- **Compute ≠ presentation.** `Retriever.search()` returns data and prints nothing. That's why the CLI, reranker and GUI all reuse it without duplicating a line.
+- **Normalize at write time**, so query-time similarity is a plain dot product. At this scale a vector DB would be premature optimization.
+- **Failures degrade, not crash.** Malformed rerank response → embedding order. Missing candidates → appended, never dropped. Hung API call → timeout, log, continue.
+- **Tested where bugs are silent** — row alignment in the vector store, rerank response parsing. Both produce plausible wrong answers instead of errors. Loud-failing code isn't tested; that's deliberate.
+- **Per-video artifact index.** Each `manifest.json` records what every stage produced and with which model, written atomically after the data file lands.
+
+---
+
+## Layout
+
+```text
+src/fightlens/
+├── __main__.py     CLI + command dispatch
+├── config.py       YAML loading, per-section validation
+├── video.py        windowing, frame sampling, manifest
+├── gemini.py       the only file that talks to the API
+├── describe.py     window → description (resumable)
+├── embeddings.py   Embedder + vector store — shared by embed and search
+├── embed.py        descriptions → embeddings.npz
+├── search.py       Retriever (returns data) + formatter (prints)
+└── rerank.py       optional LLM reranking
+scripts/app.py      Streamlit GUI
+logs/               error JSON, written only when a run actually failed
+```
+
+Each video's output is self-contained — copy, archive or delete it as one unit:
+
+```text
+data/processed/<video>/
+├── manifest.json        window metadata + artifact index
+├── descriptions.json    per window: id, timecodes, frames, description
+├── embeddings.npz       vectors · window_ids · desc hashes · model name
+└── windows/window_000000/img_00_frame_00000000_0000000.00s.jpg …
+```
+
+Videos, frames, artifacts and `.env` are gitignored — the repo stays small and the key can't be pushed by accident.
+
+---
+
+## Stack
+
+Python · Gemini (`google-genai`) · sentence-transformers · NumPy · OpenCV · Streamlit · PyYAML · pytest

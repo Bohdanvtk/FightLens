@@ -2,7 +2,7 @@ video:
   # Path to the source video.
   # Relative paths are resolved from the project root, so the program
   # works no matter which directory it is launched from.
-  input_path: "data/raw/test_video.mp4"
+  input_path: "data/raw/usik_fight.mp4"
 
   # Root directory where results are saved.
   # Relative paths are resolved from the project root.
@@ -13,12 +13,12 @@ video:
   # Duration of a single time window, in seconds.
   # Combined with the effective FPS this decides how many source frames
   # one window spans, e.g. 2s * 30fps = 60 frames per window.
-  n_sec_per_window: 1.2
+  n_sec_per_window: 4.0
 
   # How many images to keep from each window.
   # These frames are sampled evenly across the whole window, not taken
   # from its beginning only.
-  n_img_per_window: 6
+  n_img_per_window: 24
 
   # What to do if the output folder for this video already exists:
   # true  -> delete it and rewrite from scratch
@@ -58,10 +58,10 @@ descriptions:
   # per-video processed folder (data/processed/<video>/descriptions.json), so
   # every video's artifacts stay self-contained. Windows already present in
   # that file are skipped, so re-running is safe.
-  manifest_path: "data/processed/test_video/manifest.json"
+  manifest_path: "data/processed/usik_fight/manifest.json"
 
   # Pause between Gemini requests, in seconds (free-tier rate limits).
-  request_delay_seconds: 2
+  request_delay_seconds: 0.1
 
   # Extra attempts after a failed Gemini call before the window is skipped.
   # A timed-out call (see response_timeout_seconds) counts as a failed
@@ -129,7 +129,7 @@ rerank:
   # How many embedding candidates to send to the reranker (the wider
   # recall net). The user still sees search.top_k results AFTER
   # reranking, so this should be >= search.top_k.
-  top_n: 5
+  top_n: 10
 
 # Used only by the Streamlit GUI (scripts/app.py), not the CLI.
 preview:
